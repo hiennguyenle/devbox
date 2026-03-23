@@ -33,7 +33,10 @@ func runKill(cmd *cobra.Command, args []string) error {
 	client := newClient(cfg)
 	output, err := client.Run(tmux.KillSession(name))
 	if err != nil {
-		return fmt.Errorf("kill session %q: %s", name, output)
+		if output != "" {
+			return fmt.Errorf("kill session %q: %s", name, output)
+		}
+		return handleSSHError(err, cfg.Host)
 	}
 
 	fmt.Printf("Session %q killed.\n", name)

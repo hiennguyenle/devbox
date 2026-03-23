@@ -35,8 +35,10 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	// User (optional)
-	currentUser, _ := user.Current()
-	defaultUser := currentUser.Username
+	defaultUser := "root"
+	if currentUser, err := user.Current(); err == nil {
+		defaultUser = currentUser.Username
+	}
 	fmt.Printf("SSH user [%s]: ", defaultUser)
 	sshUser, _ := reader.ReadString('\n')
 	sshUser = strings.TrimSpace(sshUser)

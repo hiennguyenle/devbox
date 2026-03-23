@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
+
+var safeNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 type Config struct {
 	Host           string `yaml:"host"`
@@ -49,6 +52,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.DefaultSession == "" {
 		cfg.DefaultSession = "work"
+	}
+	if !safeNamePattern.MatchString(cfg.DefaultSession) {
+		return nil, fmt.Errorf("invalid default_session %q in config (use alphanumeric, hyphens, underscores)", cfg.DefaultSession)
 	}
 	return cfg, nil
 }

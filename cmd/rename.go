@@ -36,7 +36,10 @@ func runRename(cmd *cobra.Command, args []string) error {
 	client := newClient(cfg)
 	output, err := client.Run(tmux.RenameSession(oldName, newName))
 	if err != nil {
-		return fmt.Errorf("rename session: %s", output)
+		if output != "" {
+			return fmt.Errorf("rename session: %s", output)
+		}
+		return handleSSHError(err, cfg.Host)
 	}
 
 	fmt.Printf("Session %q renamed to %q.\n", oldName, newName)

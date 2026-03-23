@@ -5,8 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+var safeTTYPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 func SessionsDir() string {
 	return filepath.Join(Dir(), "sessions")
@@ -77,5 +80,9 @@ func ResolveTTY() (string, error) {
 	}
 	ttyPath := strings.TrimSpace(string(out))
 	// /dev/ttys003 -> ttys003
-	return filepath.Base(ttyPath), nil
+	name := filepath.Base(ttyPath)
+	if !safeTTYPattern.MatchString(name) {
+		return "", fmt.Errorf("unexpected TTY name: %q", name)
+	}
+	return name, nil
 }

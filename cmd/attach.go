@@ -147,7 +147,10 @@ func runAttachPicker(cfg *config.Config, client *sshpkg.Client) error {
 		return fmt.Errorf("picker error: %w", err)
 	}
 
-	final := result.(pickerModel)
+	final, ok := result.(pickerModel)
+	if !ok {
+		return fmt.Errorf("unexpected picker state")
+	}
 	if final.quitting || final.chosen == "" {
 		return nil // user cancelled
 	}

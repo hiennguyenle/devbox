@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/hien/devbox/internal/config"
@@ -66,7 +67,9 @@ func saveCurrentSession(name string) {
 	if err != nil {
 		return // silently skip if no TTY
 	}
-	config.SaveSession(config.SessionsDir(), tty, name)
+	if err := config.SaveSession(config.SessionsDir(), tty, name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not save session state: %v\n", err)
+	}
 }
 
 func handleSSHError(err error, host string) error {
