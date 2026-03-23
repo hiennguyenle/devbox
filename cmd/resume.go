@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/hien/devbox/internal/config"
 	"github.com/hien/devbox/internal/tmux"
 	"github.com/hien/devbox/internal/validate"
@@ -11,7 +9,7 @@ import (
 
 var resumeCmd = &cobra.Command{
 	Use:   "resume [NAME]",
-	Short: "Attach to a session (by name, or resume this terminal's last session)",
+	Short: "Attach to a session (interactive picker if no name given)",
 	Args:  cobra.MaximumNArgs(1),
 	RunE:  runResume,
 }
@@ -28,7 +26,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 
 	client := newClient(cfg)
 
-	// Named resume
+	// Named resume — direct attach
 	if len(args) == 1 {
 		name := args[0]
 		if err := validate.SessionName(name); err != nil {
@@ -38,27 +36,14 @@ func runResume(cmd *cobra.Command, args []string) error {
 		return client.Exec(tmux.NewAttachSession(name))
 	}
 
-	// Per-terminal resume
+	// No name — interactive picker, pre-select terminal's last session
+	preSelect := ""
 	tty, err := config.ResolveTTY()
-	if err != nil {
-		fmt.Println("Cannot determine terminal. Launching session picker...")
-		return runAttachPicker(cfg, client)
+	if err == nil {
+		if name, err := config.GetSession(config.SessionsDir(), tty); err == nil {
+			preSelect = name
+		}
 	}
 
-	sessionName, err := config.GetSession(config.SessionsDir(), tty)
-	if err != nil {
-		fmt.Println("No session for this terminal. Launching session picker...")
-		return runAttachPicker(cfg, client)
-	}
-
-	// Verify session still exists on remote
-	_, checkErr := client.Run(tmux.HasSession(sessionName))
-	if checkErr != nil {
-		config.DeleteSession(config.SessionsDir(), tty)
-		fmt.Printf("Session %q no longer exists. Launching session picker...\n", sessionName)
-		return runAttachPicker(cfg, client)
-	}
-
-	saveCurrentSession(sessionName)
-	return client.Exec(tmux.NewAttachSession(sessionName))
+	return runAttachPicker(cfg, client, preSelect)
 }

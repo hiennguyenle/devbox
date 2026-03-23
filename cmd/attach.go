@@ -9,27 +9,9 @@ import (
 	"github.com/hien/devbox/internal/config"
 	sshpkg "github.com/hien/devbox/internal/ssh"
 	"github.com/hien/devbox/internal/tmux"
-	"github.com/spf13/cobra"
 )
 
-var attachCmd = &cobra.Command{
-	Use:   "attach",
-	Short: "Interactive session picker",
-	RunE:  runAttach,
-}
-
-func init() {
-	rootCmd.AddCommand(attachCmd)
-}
-
-func runAttach(cmd *cobra.Command, args []string) error {
-	cfg, err := requireConfig()
-	if err != nil {
-		return err
-	}
-	client := newClient(cfg)
-	return runAttachPicker(cfg, client)
-}
+// No attachCmd — picker is accessed via "devbox resume" (no args).
 
 type sessionItem struct {
 	name    string
@@ -101,7 +83,7 @@ func (m pickerModel) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(unselectedStyle.Render("↑/↓ navigate • enter select • q quit"))
+	b.WriteString(unselectedStyle.Render("↑/↓ navigate • enter attach • esc exit"))
 	return b.String()
 }
 
@@ -124,9 +106,9 @@ func parseSessions(output string) []sessionItem {
 	return items
 }
 
-// runAttachPicker is shared by resume, last, and attach commands.
-// It fetches sessions, shows the bubbletea picker, and attaches to the chosen session.
-func runAttachPicker(cfg *config.Config, client *sshpkg.Client) error {
+// runAttachPicker shows an interactive session picker. preSelect is the session
+// name to highlight initially (e.g. the terminal's last session), or "" for default.
+func runAttachPicker(cfg *config.Config, client *sshpkg.Client, preSelect string) error {
 	output, err := client.Run(tmux.ListSessions())
 	if err != nil || strings.TrimSpace(output) == "" {
 		fmt.Println("No sessions available. Creating default session...")
@@ -140,7 +122,18 @@ func runAttachPicker(cfg *config.Config, client *sshpkg.Client) error {
 		return client.Exec(tmux.NewAttachSession(cfg.DefaultSession))
 	}
 
-	model := pickerModel{sessions: sessions}
+	// Pre-select the cursor to the last used session if known
+	cursor := 0
+	if preSelect != "" {
+		for i, s := range sessions {
+			if s.name == preSelect {
+				cursor = i
+				break
+			}
+		}
+	}
+
+	model := pickerModel{sessions: sessions, cursor: cursor}
 	p := tea.NewProgram(model)
 	result, err := p.Run()
 	if err != nil {
