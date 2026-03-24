@@ -79,18 +79,14 @@ func (c *Client) Exec(remoteCmd string) error {
 			}
 		}
 
-		// Connection failure — auto-reconnect
+		// Connection failure — auto-reconnect with spinner
 		attempt++
 		delay := reconnectDelay(attempt)
 
-		fmt.Fprintf(os.Stderr, "\nConnection lost. Reconnecting in %s... (Ctrl+C to cancel)\n", delay)
-
-		select {
-		case <-sigCh:
-			fmt.Fprintln(os.Stderr, "\nReconnect cancelled.")
+		cancelled := spinWait(delay, c.Host, sigCh)
+		if cancelled {
+			fmt.Fprintf(os.Stderr, "\r\033[K")
 			return nil
-		case <-time.After(delay):
-			fmt.Fprintf(os.Stderr, "Reconnecting to %s (attempt %d)...\n", c.Host, attempt)
 		}
 	}
 }
@@ -105,5 +101,32 @@ func reconnectDelay(attempt int) time.Duration {
 		return 10 * time.Second
 	default:
 		return 30 * time.Second
+	}
+}
+
+// spinWait shows an animated spinner while waiting to reconnect.
+// Returns true if cancelled by Ctrl+C.
+func spinWait(delay time.Duration, host string, sigCh <-chan os.Signal) bool {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	ticker := time.NewTicker(80 * time.Millisecond)
+	defer ticker.Stop()
+
+	deadline := time.After(delay)
+	frame := 0
+
+	for {
+		// Show spinner
+		fmt.Fprintf(os.Stderr, "\r\033[K  %s Reconnecting to %s...", frames[frame%len(frames)], host)
+		frame++
+
+		select {
+		case <-sigCh:
+			return true
+		case <-deadline:
+			fmt.Fprintf(os.Stderr, "\r\033[K")
+			return false
+		case <-ticker.C:
+			// next frame
+		}
 	}
 }
