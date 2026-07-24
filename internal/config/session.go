@@ -16,11 +16,11 @@ func SessionsDir() string {
 }
 
 func SaveSession(sessDir, ttyName, sessionName string) error {
-	if err := os.MkdirAll(sessDir, 0755); err != nil {
+	if err := os.MkdirAll(sessDir, 0700); err != nil {
 		return err
 	}
 	path := filepath.Join(sessDir, ttyName)
-	return os.WriteFile(path, []byte(sessionName), 0644)
+	return os.WriteFile(path, []byte(sessionName), 0600)
 }
 
 func GetSession(sessDir, ttyName string) (string, error) {
@@ -36,41 +36,26 @@ func GetSession(sessDir, ttyName string) (string, error) {
 	return name, nil
 }
 
-func DeleteSession(sessDir, ttyName string) {
-	path := filepath.Join(sessDir, ttyName)
-	os.Remove(path)
-}
-
-func LastSession(sessDir string) (string, error) {
+// DeleteSessionsByName removes every per-terminal record that points at
+// sessionName, so a killed session stops being pre-selected on resume.
+func DeleteSessionsByName(sessDir, sessionName string) {
 	entries, err := os.ReadDir(sessDir)
-	if err != nil || len(entries) == 0 {
-		return "", fmt.Errorf("no session history")
+	if err != nil {
+		return
 	}
-
-	var newest string
-	var newestTime int64
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		info, err := e.Info()
+		path := filepath.Join(sessDir, e.Name())
+		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		if info.ModTime().UnixNano() > newestTime {
-			newestTime = info.ModTime().UnixNano()
-			path := filepath.Join(sessDir, e.Name())
-			data, err := os.ReadFile(path)
-			if err == nil {
-				newest = strings.TrimSpace(string(data))
-			}
+		if strings.TrimSpace(string(data)) == sessionName {
+			os.Remove(path)
 		}
 	}
-
-	if newest == "" {
-		return "", fmt.Errorf("no session history")
-	}
-	return newest, nil
 }
 
 func ResolveTTY() (string, error) {

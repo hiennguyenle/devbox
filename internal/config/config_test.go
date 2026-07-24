@@ -63,6 +63,47 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 }
 
+func TestSave_OwnerOnlyPerms(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := Save(&Config{Host: "h"}, path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("config perms = %o, want 600", perm)
+	}
+}
+
+func TestLoad_InvalidPort(t *testing.T) {
+	for _, yaml := range []string{"host: h\nport: 70000\n", "host: h\nport: -5\n"} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		os.WriteFile(path, []byte(yaml), 0600)
+		if _, err := Load(path); err == nil {
+			t.Errorf("Load should reject %q", yaml)
+		}
+	}
+}
+
+func TestLoad_InvalidHost(t *testing.T) {
+	invalid := []string{
+		"host: \"-oProxyCommand=evil\"\n",
+		"user: hien\n", // missing host entirely
+	}
+	for _, yaml := range invalid {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		os.WriteFile(path, []byte(yaml), 0600)
+		if _, err := Load(path); err == nil {
+			t.Errorf("Load should reject %q", yaml)
+		}
+	}
+}
+
 func TestConfigDir(t *testing.T) {
 	dir := t.TempDir()
 	original := configDirOverride

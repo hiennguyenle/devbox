@@ -4,12 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 
+	"github.com/hien/devbox/internal/validate"
 	"gopkg.in/yaml.v3"
 )
-
-var safeNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 type Config struct {
 	Host           string `yaml:"host"`
@@ -53,15 +51,26 @@ func Load(path string) (*Config, error) {
 	if cfg.DefaultSession == "" {
 		cfg.DefaultSession = "work"
 	}
-	if !safeNamePattern.MatchString(cfg.DefaultSession) {
-		return nil, fmt.Errorf("invalid default_session %q in config (use alphanumeric, hyphens, underscores)", cfg.DefaultSession)
+	if err := validate.Host(cfg.Host); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if cfg.User != "" {
+		if err := validate.User(cfg.User); err != nil {
+			return nil, fmt.Errorf("config: %w", err)
+		}
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return nil, fmt.Errorf("config: invalid port %d (must be 1-65535)", cfg.Port)
+	}
+	if err := validate.SessionName(cfg.DefaultSession); err != nil {
+		return nil, fmt.Errorf("config: default_session: %w", err)
 	}
 	return cfg, nil
 }
 
 func Save(cfg *Config, path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("cannot create config directory: %w", err)
 	}
 
@@ -70,7 +79,7 @@ func Save(cfg *Config, path string) error {
 		return fmt.Errorf("cannot serialize config: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 func Exists() bool {

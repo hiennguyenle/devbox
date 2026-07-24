@@ -1,9 +1,9 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestSaveAndGetSession(t *testing.T) {
@@ -31,41 +31,44 @@ func TestGetSession_NotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteSession(t *testing.T) {
+func TestSaveSession_OwnerOnlyPerms(t *testing.T) {
 	dir := t.TempDir()
 	sessDir := filepath.Join(dir, "sessions")
-	SaveSession(sessDir, "ttys003", "work")
-	DeleteSession(sessDir, "ttys003")
-
-	_, err := GetSession(sessDir, "ttys003")
-	if err == nil {
-		t.Error("GetSession should fail after delete")
+	if err := SaveSession(sessDir, "ttys003", "work"); err != nil {
+		t.Fatalf("SaveSession: %v", err)
 	}
-}
-
-func TestLastSession(t *testing.T) {
-	dir := t.TempDir()
-	sessDir := filepath.Join(dir, "sessions")
-
-	SaveSession(sessDir, "ttys001", "api")
-	time.Sleep(10 * time.Millisecond)
-	SaveSession(sessDir, "ttys002", "work")
-
-	name, err := LastSession(sessDir)
+	info, err := os.Stat(filepath.Join(sessDir, "ttys003"))
 	if err != nil {
-		t.Fatalf("LastSession: %v", err)
+		t.Fatalf("Stat: %v", err)
 	}
-	if name != "work" {
-		t.Errorf("LastSession = %q, want %q", name, "work")
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("session file perms = %o, want 600", perm)
 	}
 }
 
-func TestLastSession_Empty(t *testing.T) {
+func TestDeleteSessionsByName(t *testing.T) {
 	dir := t.TempDir()
-	_, err := LastSession(dir)
-	if err == nil {
-		t.Error("LastSession should fail with no sessions")
+	sessDir := filepath.Join(dir, "sessions")
+	SaveSession(sessDir, "ttys001", "api")
+	SaveSession(sessDir, "ttys002", "work")
+	SaveSession(sessDir, "ttys003", "api")
+
+	DeleteSessionsByName(sessDir, "api")
+
+	if _, err := GetSession(sessDir, "ttys001"); err == nil {
+		t.Error("ttys001 record should be removed (pointed at killed session)")
 	}
+	if _, err := GetSession(sessDir, "ttys003"); err == nil {
+		t.Error("ttys003 record should be removed (pointed at killed session)")
+	}
+	if name, err := GetSession(sessDir, "ttys002"); err != nil || name != "work" {
+		t.Errorf("ttys002 record should survive, got %q err %v", name, err)
+	}
+}
+
+func TestDeleteSessionsByName_MissingDir(t *testing.T) {
+	// Must not panic when the sessions dir doesn't exist yet
+	DeleteSessionsByName(filepath.Join(t.TempDir(), "nope"), "api")
 }
 
 func TestResolveTTY(t *testing.T) {

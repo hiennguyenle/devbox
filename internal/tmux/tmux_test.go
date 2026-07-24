@@ -4,9 +4,27 @@ import "testing"
 
 func TestNewAttachSession(t *testing.T) {
 	got := NewAttachSession("work")
-	want := "tmux new -A -s work"
+	want := "tmux new -A -s 'work'"
 	if got != want {
 		t.Errorf("NewAttachSession(work) = %q, want %q", got, want)
+	}
+}
+
+func TestNewAttachSession_QuotesMetacharacters(t *testing.T) {
+	// Session names sourced from remote list-sessions can contain anything
+	// tmux allows; the remote shell must see them as one literal word.
+	got := NewAttachSession("a b;$(rm x)")
+	want := `tmux new -A -s 'a b;$(rm x)'`
+	if got != want {
+		t.Errorf("NewAttachSession = %q, want %q", got, want)
+	}
+}
+
+func TestNewAttachSession_EscapesSingleQuotes(t *testing.T) {
+	got := NewAttachSession("it's")
+	want := `tmux new -A -s 'it'\''s'`
+	if got != want {
+		t.Errorf("NewAttachSession = %q, want %q", got, want)
 	}
 }
 
@@ -18,34 +36,19 @@ func TestListSessions(t *testing.T) {
 	}
 }
 
-func TestKillSession(t *testing.T) {
+func TestKillSession_ExactMatchTarget(t *testing.T) {
+	// "=" prefix forces exact match so "api" can never prefix-match "api2"
 	got := KillSession("api")
-	want := "tmux kill-session -t api"
+	want := "tmux kill-session -t '=api'"
 	if got != want {
 		t.Errorf("KillSession(api) = %q, want %q", got, want)
 	}
 }
 
-func TestRenameSession(t *testing.T) {
+func TestRenameSession_ExactMatchTarget(t *testing.T) {
 	got := RenameSession("old", "new")
-	want := "tmux rename-session -t old new"
+	want := "tmux rename-session -t '=old' 'new'"
 	if got != want {
 		t.Errorf("RenameSession(old, new) = %q, want %q", got, want)
-	}
-}
-
-func TestListWindows(t *testing.T) {
-	got := ListWindows("work")
-	want := "tmux list-windows -t work"
-	if got != want {
-		t.Errorf("ListWindows(work) = %q, want %q", got, want)
-	}
-}
-
-func TestHasSession(t *testing.T) {
-	got := HasSession("api")
-	want := "tmux has-session -t api"
-	if got != want {
-		t.Errorf("HasSession(api) = %q, want %q", got, want)
 	}
 }
