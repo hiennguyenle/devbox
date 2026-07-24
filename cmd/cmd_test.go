@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -25,6 +26,30 @@ func useTempConfigDir(t *testing.T) string {
 	config.SetDirOverride(dir)
 	t.Cleanup(func() { config.SetDirOverride("") })
 	return dir
+}
+
+// saveConfig writes a config with the given profiles and marks the first as
+// default, then returns it.
+func saveConfig(t *testing.T, profiles map[string]*config.Profile, def string) {
+	t.Helper()
+	cfg := &config.Config{DefaultProfile: def, Profiles: profiles}
+	if err := config.Save(cfg, config.Path()); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+}
+
+// oneProfile is a config with a single profile that is also the default.
+func oneProfile(name, host string) (map[string]*config.Profile, string) {
+	return map[string]*config.Profile{name: {Host: host, DefaultSession: "work"}}, name
+}
+
+// fakeTTY makes config.ResolveTTY return a fixed name, so per-terminal logic is
+// deterministic in tests that would otherwise skip for lack of a real TTY.
+func fakeTTY(t *testing.T, name string) {
+	t.Helper()
+	orig := config.ResolveTTY
+	config.ResolveTTY = func() (string, error) { return name, nil }
+	t.Cleanup(func() { config.ResolveTTY = orig })
 }
 
 // --- parseSessions ---
@@ -94,16 +119,65 @@ func TestHandleExecErr_PassthroughOtherErrors(t *testing.T) {
 
 // --- root command ---
 
-func TestRoot_RejectsStrayArgs(t *testing.T) {
-	// "devbox tpyo" must error, not silently attach to the default session
+func TestRoot_AcceptsAtMostOneProfileArg(t *testing.T) {
 	if rootCmd.Args == nil {
-		t.Fatal("rootCmd.Args is nil; stray args are accepted")
-	}
-	if err := rootCmd.Args(rootCmd, []string{"tpyo"}); err == nil {
-		t.Error("stray arg should be rejected")
+		t.Fatal("rootCmd.Args is nil")
 	}
 	if err := rootCmd.Args(rootCmd, nil); err != nil {
 		t.Errorf("no args should be accepted, got %v", err)
+	}
+	if err := rootCmd.Args(rootCmd, []string{"builder-104"}); err != nil {
+		t.Errorf("one profile arg should be accepted, got %v", err)
+	}
+	if err := rootCmd.Args(rootCmd, []string{"a", "b"}); err == nil {
+		t.Error("two args should be rejected")
+	}
+}
+
+func TestRunRoot_UnknownProfileErrors(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+
+	orig := newClient
+	newClient = func(*config.Profile) sshpkg.Executor { return &sshpkg.MockExecutor{} }
+	t.Cleanup(func() { newClient = orig })
+
+	if err := runRoot(rootCmd, []string{"nope"}); err == nil || !strings.Contains(err.Error(), "unknown profile") {
+		t.Errorf("got %v, want unknown-profile error", err)
+	}
+}
+
+func TestRunRoot_AttachesResolvedProfileAndRecordsIt(t *testing.T) {
+	dir := useTempConfigDir(t)
+	fakeTTY(t, "ttytest")
+	profiles := map[string]*config.Profile{
+		"builder-104": {Host: "b104", DefaultSession: "work"},
+		"aaa":         {Host: "hostA", DefaultSession: "main"},
+	}
+	saveConfig(t, profiles, "builder-104")
+
+	var gotHost string
+	mock := &sshpkg.MockExecutor{}
+	orig := newClient
+	newClient = func(prof *config.Profile) sshpkg.Executor {
+		gotHost = prof.Host
+		return mock
+	}
+	t.Cleanup(func() { newClient = orig })
+
+	// Explicit positional profile "aaa" -> attach hostA:main and record aaa.
+	if err := runRoot(rootCmd, []string{"aaa"}); err != nil {
+		t.Fatalf("runRoot: %v", err)
+	}
+	if gotHost != "hostA" {
+		t.Errorf("attached host = %q, want hostA", gotHost)
+	}
+	if len(mock.ExecCalls) != 1 || !strings.Contains(mock.ExecCalls[0], "main") {
+		t.Errorf("Exec calls = %v, want attach to session main", mock.ExecCalls)
+	}
+	if got, _ := config.GetLastProfile(filepath.Join(dir, "lastprofile"), "ttytest"); got != "aaa" {
+		t.Errorf("recorded last profile = %q, want aaa", got)
 	}
 }
 
@@ -112,20 +186,20 @@ func TestRoot_RejectsStrayArgs(t *testing.T) {
 func TestKillSession_RunsKillAndCleansAffinity(t *testing.T) {
 	dir := useTempConfigDir(t)
 	sessDir := filepath.Join(dir, "sessions")
-	config.SaveSession(sessDir, "ttys001", "api")
-	config.SaveSession(sessDir, "ttys002", "work")
+	config.SaveSession(sessDir, "builder-104", "ttys001", "api")
+	config.SaveSession(sessDir, "builder-104", "ttys002", "work")
 
 	mock := &sshpkg.MockExecutor{}
-	if err := killSession(mock, "myhost", "api"); err != nil {
+	if err := killSession(mock, "builder-104", "myhost", "api"); err != nil {
 		t.Fatalf("killSession: %v", err)
 	}
 	if !mock.LastRunContains("kill-session") || !mock.LastRunContains("api") {
 		t.Errorf("expected kill-session for api, got %v", mock.RunCalls)
 	}
-	if _, err := config.GetSession(sessDir, "ttys001"); err == nil {
+	if _, err := config.GetSession(sessDir, "builder-104", "ttys001"); err == nil {
 		t.Error("affinity record for killed session should be removed")
 	}
-	if name, _ := config.GetSession(sessDir, "ttys002"); name != "work" {
+	if name, _ := config.GetSession(sessDir, "builder-104", "ttys002"); name != "work" {
 		t.Error("unrelated affinity record should survive")
 	}
 }
@@ -139,6 +213,7 @@ func keyRune(r rune) tea.KeyMsg {
 func newTestKillModel(mock *sshpkg.MockExecutor) killPickerModel {
 	return killPickerModel{
 		client:   mock,
+		profile:  "builder-104",
 		host:     "myhost",
 		sessions: []sessionItem{{name: "api"}, {name: "work"}},
 	}
@@ -335,23 +410,51 @@ func TestListSessionsForPicker_ParsesSessions(t *testing.T) {
 	}
 }
 
-// --- connect: preserve customized default_session ---
+// --- profile: default assignment and listing ---
 
-func TestPreservedDefaultSession_KeepsExisting(t *testing.T) {
-	useTempConfigDir(t)
-	cfg := &config.Config{Host: "h", DefaultSession: "myproj"}
-	if err := config.Save(cfg, config.Path()); err != nil {
-		t.Fatal(err)
+func TestNextDefaultProfile(t *testing.T) {
+	cases := []struct {
+		prior, name string
+		optIn       bool
+		want        string
+	}{
+		{"", "builder-104", false, "builder-104"},            // first profile auto-default
+		{"builder-104", "aaa", false, "builder-104"},         // adding another, no opt-in
+		{"builder-104", "aaa", true, "aaa"},                  // adding another, opt-in
+		{"builder-104", "builder-104", false, "builder-104"}, // editing the default
 	}
-	if got := preservedDefaultSession(); got != "myproj" {
-		t.Errorf("got %q, want myproj", got)
+	for _, c := range cases {
+		if got := nextDefaultProfile(c.prior, c.name, c.optIn); got != c.want {
+			t.Errorf("nextDefaultProfile(%q,%q,%v) = %q, want %q", c.prior, c.name, c.optIn, got, c.want)
+		}
 	}
 }
 
-func TestPreservedDefaultSession_DefaultsToWork(t *testing.T) {
-	useTempConfigDir(t)
-	if got := preservedDefaultSession(); got != "work" {
-		t.Errorf("got %q, want work", got)
+func TestWriteProfileList_MarksDefault(t *testing.T) {
+	cfg := &config.Config{
+		DefaultProfile: "builder-104",
+		Profiles: map[string]*config.Profile{
+			"builder-104": {Host: "b104", User: "hien", Port: 22, DefaultSession: "work"},
+			"aaa":         {Host: "hostA", User: "root", Port: 2200, DefaultSession: "main"},
+		},
+	}
+	var buf bytes.Buffer
+	writeProfileList(&buf, cfg)
+	out := buf.String()
+
+	for _, want := range []string{"builder-104", "b104", "aaa", "hostA", "2200", "main"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list output missing %q:\n%s", want, out)
+		}
+	}
+	// The default profile's row is marked with "*"; the other is not.
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(line, "builder-104") && !strings.HasPrefix(line, "*") {
+			t.Errorf("default row not marked with *: %q", line)
+		}
+		if strings.Contains(line, "aaa") && strings.HasPrefix(line, "*") {
+			t.Errorf("non-default row wrongly marked: %q", line)
+		}
 	}
 }
 
@@ -359,12 +462,11 @@ func TestPreservedDefaultSession_DefaultsToWork(t *testing.T) {
 
 func TestRunShell_SwallowsRemoteExitCodes(t *testing.T) {
 	useTempConfigDir(t)
-	if err := config.Save(&config.Config{Host: "h"}, config.Path()); err != nil {
-		t.Fatal(err)
-	}
+	p, def := oneProfile("h", "h")
+	saveConfig(t, p, def)
 	mock := &sshpkg.MockExecutor{ExecErr: exitWith(t, 1)}
 	orig := newClient
-	newClient = func(cfg *config.Config) sshpkg.Executor { return mock }
+	newClient = func(*config.Profile) sshpkg.Executor { return mock }
 	t.Cleanup(func() { newClient = orig })
 
 	if err := runShell(shellCmd, nil); err != nil {
@@ -377,12 +479,11 @@ func TestRunShell_SwallowsRemoteExitCodes(t *testing.T) {
 
 func TestRunShell_SurfacesSpawnFailure(t *testing.T) {
 	useTempConfigDir(t)
-	if err := config.Save(&config.Config{Host: "h"}, config.Path()); err != nil {
-		t.Fatal(err)
-	}
+	p, def := oneProfile("h", "h")
+	saveConfig(t, p, def)
 	mock := &sshpkg.MockExecutor{ExecErr: exec.Command("/nonexistent/ssh").Run()}
 	orig := newClient
-	newClient = func(cfg *config.Config) sshpkg.Executor { return mock }
+	newClient = func(*config.Profile) sshpkg.Executor { return mock }
 	t.Cleanup(func() { newClient = orig })
 
 	if err := runShell(shellCmd, nil); err == nil {

@@ -130,17 +130,18 @@ func listSessionsForPicker(client sshpkg.Executor, host string) ([]sessionItem, 
 	return parseSessions(output), nil
 }
 
-// runAttachPicker shows an interactive session picker. preSelect is the session
-// name to highlight initially (e.g. the terminal's last session), or "" for default.
-func runAttachPicker(cfg *config.Config, client sshpkg.Executor, preSelect string) error {
-	sessions, err := listSessionsForPicker(client, cfg.Host)
+// runAttachPicker shows an interactive session picker for a resolved profile.
+// preSelect is the session name to highlight initially (e.g. the terminal's
+// last session on this profile), or "" for default.
+func runAttachPicker(profName string, prof *config.Profile, client sshpkg.Executor, preSelect string) error {
+	sessions, err := listSessionsForPicker(client, prof.Host)
 	if err != nil {
 		return err
 	}
 	if len(sessions) == 0 {
 		fmt.Println("No sessions available. Creating default session...")
-		saveCurrentSession(cfg.DefaultSession)
-		return handleExecErr(client.Exec(tmux.NewAttachSession(cfg.DefaultSession)), cfg.Host)
+		recordProfileSession(profName, prof.DefaultSession)
+		return handleExecErr(client.Exec(tmux.NewAttachSession(prof.DefaultSession)), prof.Host)
 	}
 
 	// Pre-select the cursor to the last used session if known
@@ -169,6 +170,6 @@ func runAttachPicker(cfg *config.Config, client sshpkg.Executor, preSelect strin
 		return nil // user cancelled
 	}
 
-	saveCurrentSession(final.chosen)
-	return handleExecErr(client.Exec(tmux.NewAttachSession(final.chosen)), cfg.Host)
+	recordProfileSession(profName, final.chosen)
+	return handleExecErr(client.Exec(tmux.NewAttachSession(final.chosen)), prof.Host)
 }

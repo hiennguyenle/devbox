@@ -28,31 +28,47 @@ This stamps the binary with the current git tag and installs it to
 
 ## Setup
 
-Configure your remote host:
+devbox manages one or more remote hosts as named **profiles**. Add one:
 
 ```bash
-devbox connect
+devbox profile
 ```
 
-This prompts for SSH host (required), user (defaults to your local username),
-and port (defaults to 22), then tests the connection and writes
-`~/.config/devbox/config.yaml`. If the test fails it asks whether to save the
-config anyway.
+This prompts for a profile name, SSH host (required), user (defaults to your
+local username), port (defaults to 22), and default session, tests the
+connection, and writes `~/.config/devbox/config.yaml`. If the test fails it
+asks whether to save anyway. The first profile you add becomes the default;
+adding more asks whether to make each the new default.
 
 ```yaml
-host: dev.example.com
-user: hien
-port: 22
-default_session: work
+default_profile: builder-104
+profiles:
+  builder-104:
+    host: builder-104
+    user: hien
+    port: 22
+    default_session: work
+  aaa:
+    host: 10.0.0.5
+    user: root
+    port: 22
+    default_session: work
 ```
 
-`default_session` is the session bare `devbox` attaches to. Edit it by hand —
-re-running `devbox connect` preserves whatever you set.
+`default_session` is the session devbox attaches to when you connect to that
+profile. `devbox connect` is a kept alias for `devbox profile`.
+
+An existing single-host config (top-level `host:`) is migrated automatically:
+it becomes a profile named after the host's first label.
 
 ## Usage
 
 ```bash
-devbox                  # attach to default session ("work")
+devbox                  # connect to the last-used profile on this terminal, else the default
+devbox aaa              # connect to profile "aaa" (attaches to its default session)
+devbox profile          # add or update a profile
+devbox profile aaa      # add or update profile "aaa" (name pre-filled)
+devbox profile --list   # list profiles (* marks the default)
 devbox list             # list remote tmux sessions
 devbox new              # create a session with a generated name
 devbox new api          # create or attach to session "api"
@@ -66,7 +82,10 @@ devbox version          # print version
 devbox help             # print usage
 ```
 
-Add `-v` / `--verbose` to any command to print the SSH command being executed.
+Every command acts on the resolved profile — the last one used on this
+terminal, or the default. Use `-p` / `--profile <name>` to target a specific
+profile without connecting to it first (e.g. `devbox list -p aaa`). Add `-v` /
+`--verbose` to print the SSH command being executed.
 
 ## Auto-Reconnect
 
@@ -88,10 +107,12 @@ whole time.
 
 ## Session Tracking
 
-Each terminal remembers which tmux session it was last attached to (keyed by
-TTY, stored in `~/.config/devbox/sessions/`). Running `devbox resume` without
-a name opens the session picker with that session pre-selected. Killing a
-session also clears any terminal records pointing at it.
+Each terminal remembers, per profile, which tmux session it was last attached
+to (keyed by TTY, stored under `~/.config/devbox/sessions/<profile>/`).
+Running `devbox resume` without a name opens the session picker with that
+session pre-selected. Killing a session also clears any terminal records
+pointing at it. Each terminal also remembers its last-used profile
+(`~/.config/devbox/lastprofile/`), which is what bare `devbox` reconnects to.
 
 ## Requirements
 

@@ -24,7 +24,11 @@ func runResume(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := newClient(cfg)
+	profName, prof, err := resolveProfile(cfg, "")
+	if err != nil {
+		return err
+	}
+	client := newClient(prof)
 
 	// Named resume — direct attach
 	if len(args) == 1 {
@@ -32,18 +36,17 @@ func runResume(cmd *cobra.Command, args []string) error {
 		if err := validate.SessionName(name); err != nil {
 			return err
 		}
-		saveCurrentSession(name)
-		return handleExecErr(client.Exec(tmux.NewAttachSession(name)), cfg.Host)
+		recordProfileSession(profName, name)
+		return handleExecErr(client.Exec(tmux.NewAttachSession(name)), prof.Host)
 	}
 
-	// No name — interactive picker, pre-select terminal's last session
+	// No name — interactive picker, pre-select terminal's last session on this profile
 	preSelect := ""
-	tty, err := config.ResolveTTY()
-	if err == nil {
-		if name, err := config.GetSession(config.SessionsDir(), tty); err == nil {
+	if tty, err := config.ResolveTTY(); err == nil {
+		if name, err := config.GetSession(config.SessionsDir(), profName, tty); err == nil {
 			preSelect = name
 		}
 	}
 
-	return runAttachPicker(cfg, client, preSelect)
+	return runAttachPicker(profName, prof, client, preSelect)
 }

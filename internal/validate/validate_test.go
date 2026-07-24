@@ -5,6 +5,44 @@ import (
 	"testing"
 )
 
+func TestProfileName_Valid(t *testing.T) {
+	valid := []string{"builder-104", "aaa", "work", "a", "host_1", "s-1a2b", "1"}
+	for _, name := range valid {
+		if err := ProfileName(name); err != nil {
+			t.Errorf("ProfileName(%q) should be valid, got: %v", name, err)
+		}
+	}
+}
+
+func TestProfileName_Invalid(t *testing.T) {
+	invalid := []struct {
+		name   string
+		reason string
+	}{
+		{"", "empty"},
+		{"-foo", "leading dash"},
+		{"a b", "space"},
+		{"a.b", "dot"},
+		{"a/b", "slash"},
+		{"user@host", "at sign"},
+		{strings.Repeat("a", 51), "too long"},
+	}
+	for _, tc := range invalid {
+		if err := ProfileName(tc.name); err == nil {
+			t.Errorf("ProfileName(%q) should fail (%s), got nil", tc.name, tc.reason)
+		}
+	}
+}
+
+func TestProfileName_ReservedRejected(t *testing.T) {
+	reserved := []string{"list", "new", "resume", "kill", "rename", "shell", "version", "profile", "connect", "help", "completion"}
+	for _, name := range reserved {
+		if err := ProfileName(name); err == nil {
+			t.Errorf("ProfileName(%q) should be rejected as reserved, got nil", name)
+		}
+	}
+}
+
 func TestSessionName_Valid(t *testing.T) {
 	valid := []string{"work", "api", "my-session", "test_123", "a"}
 	for _, name := range valid {

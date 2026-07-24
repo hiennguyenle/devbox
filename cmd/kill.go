@@ -29,7 +29,11 @@ func runKill(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	client := newClient(cfg)
+	profName, prof, err := resolveProfile(cfg, "")
+	if err != nil {
+		return err
+	}
+	client := newClient(prof)
 
 	// Direct kill by name
 	if len(args) == 1 {
@@ -37,20 +41,20 @@ func runKill(cmd *cobra.Command, args []string) error {
 		if err := validate.SessionName(name); err != nil {
 			return err
 		}
-		return killSession(client, cfg.Host, name)
+		return killSession(client, profName, prof.Host, name)
 	}
 
 	// Interactive mode
-	sessions, err := listSessionsForPicker(client, cfg.Host)
+	sessions, err := listSessionsForPicker(client, prof.Host)
 	if err != nil {
 		return err
 	}
 	if len(sessions) == 0 {
-		fmt.Printf("No active sessions on %s.\n", cfg.Host)
+		fmt.Printf("No active sessions on %s.\n", prof.Host)
 		return nil
 	}
 
-	model := killPickerModel{client: client, host: cfg.Host, sessions: sessions}
+	model := killPickerModel{client: client, profile: profName, host: prof.Host, sessions: sessions}
 	p := tea.NewProgram(model)
 	result, err := p.Run()
 	if err != nil {
@@ -71,7 +75,7 @@ func runKill(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func killSession(client sshpkg.Executor, host, name string) error {
+func killSession(client sshpkg.Executor, profile, host, name string) error {
 	output, err := client.Run(tmux.KillSession(name))
 	if err != nil {
 		if output != "" {
@@ -79,7 +83,7 @@ func killSession(client sshpkg.Executor, host, name string) error {
 		}
 		return handleSSHError(output, err, host)
 	}
-	config.DeleteSessionsByName(config.SessionsDir(), name)
+	config.DeleteSessionsByName(config.SessionsDir(), profile, name)
 	fmt.Printf("Killed %q\n", name)
 	return nil
 }
@@ -95,6 +99,7 @@ type killResultMsg struct {
 // tea.Cmds so a slow SSH round-trip never freezes the UI.
 type killPickerModel struct {
 	client      sshpkg.Executor
+	profile     string
 	host        string
 	sessions    []sessionItem
 	cursor      int
@@ -175,7 +180,7 @@ func (m killPickerModel) finishKill(msg killResultMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	config.DeleteSessionsByName(config.SessionsDir(), msg.name)
+	config.DeleteSessionsByName(config.SessionsDir(), m.profile, msg.name)
 	m.killed = append(m.killed, msg.name)
 	for i, s := range m.sessions {
 		if s.name == msg.name {

@@ -7,6 +7,34 @@ import (
 
 var sessionNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
+// profileNamePattern requires a leading alphanumeric so a profile name can
+// never be parsed as a flag and stays a single argv token.
+var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
+
+// reservedNames are command and built-in names a profile may not use, so that
+// "devbox <name>" is never ambiguous with a subcommand.
+var reservedNames = map[string]bool{
+	"list": true, "new": true, "resume": true, "kill": true,
+	"rename": true, "shell": true, "version": true, "profile": true,
+	"connect": true, "help": true, "completion": true,
+}
+
+func ProfileName(name string) error {
+	if name == "" {
+		return fmt.Errorf("profile name cannot be empty")
+	}
+	if len(name) > 50 {
+		return fmt.Errorf("profile name too long (max 50 characters)")
+	}
+	if !profileNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid profile name %q (use alphanumeric, hyphens, underscores; must not start with a dash)", name)
+	}
+	if reservedNames[name] {
+		return fmt.Errorf("profile name %q is reserved (it collides with a devbox command)", name)
+	}
+	return nil
+}
+
 // Both patterns require a leading alphanumeric so values can never be
 // parsed as an ssh option (leading "-") and stay a single argv token.
 // Hosts additionally allow ":" for IPv6 literals and "%" for zone suffixes

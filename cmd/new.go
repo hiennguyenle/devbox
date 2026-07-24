@@ -38,11 +38,16 @@ func runNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := newClient(cfg)
-	fmt.Printf("Creating session %q...\n", name)
-	saveCurrentSession(name)
+	profName, prof, err := resolveProfile(cfg, "")
+	if err != nil {
+		return err
+	}
 
-	return handleExecErr(client.Exec(tmux.NewAttachSession(name)), cfg.Host)
+	client := newClient(prof)
+	fmt.Printf("Creating session %q...\n", name)
+	recordProfileSession(profName, name)
+
+	return handleExecErr(client.Exec(tmux.NewAttachSession(name)), prof.Host)
 }
 
 func generateSessionID() string {

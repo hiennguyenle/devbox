@@ -3,7 +3,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -14,20 +13,22 @@ import (
 )
 
 var (
-	verbose bool
-	version = "dev"
+	verbose     bool
+	profileFlag string
+	version     = "dev"
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "devbox",
+	Use:     "devbox [PROFILE]",
 	Short:   "Manage remote tmux sessions over SSH",
 	Version: version,
-	Args:    cobra.NoArgs,
+	Args:    cobra.MaximumNArgs(1),
 	RunE:    runRoot,
 }
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "print SSH commands being executed")
+	rootCmd.PersistentFlags().StringVarP(&profileFlag, "profile", "p", "", "profile to act on (overrides last-used/default)")
 }
 
 func Execute() error {
@@ -40,39 +41,36 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := newClient(cfg)
-	sessionName := cfg.DefaultSession
+	explicit := ""
+	if len(args) == 1 {
+		explicit = args[0]
+	}
+	name, prof, err := resolveProfile(cfg, explicit)
+	if err != nil {
+		return err
+	}
 
-	saveCurrentSession(sessionName)
+	client := newClient(prof)
+	recordProfileSession(name, prof.DefaultSession)
 
-	remoteCmd := tmux.NewAttachSession(sessionName)
-	return handleExecErr(client.Exec(remoteCmd), cfg.Host)
+	remoteCmd := tmux.NewAttachSession(prof.DefaultSession)
+	return handleExecErr(client.Exec(remoteCmd), prof.Host)
 }
 
 func requireConfig() (*config.Config, error) {
 	if !config.Exists() {
-		return nil, fmt.Errorf("no host configured. Run \"devbox connect\" first")
+		return nil, fmt.Errorf("no profiles configured. Run \"devbox profile\" first")
 	}
 	return config.LoadDefault()
 }
 
 // newClient is a var so tests can inject a MockExecutor.
-var newClient = func(cfg *config.Config) sshpkg.Executor {
+var newClient = func(prof *config.Profile) sshpkg.Executor {
 	return &sshpkg.Client{
-		Host:    cfg.Host,
-		User:    cfg.User,
-		Port:    cfg.Port,
+		Host:    prof.Host,
+		User:    prof.User,
+		Port:    prof.Port,
 		Verbose: verbose,
-	}
-}
-
-func saveCurrentSession(name string) {
-	tty, err := config.ResolveTTY()
-	if err != nil {
-		return // silently skip if no TTY
-	}
-	if err := config.SaveSession(config.SessionsDir(), tty, name); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not save session state: %v\n", err)
 	}
 }
 
@@ -85,7 +83,7 @@ func handleSSHError(output string, err error, host string) error {
 	if strings.Contains(output, "command not found") {
 		return fmt.Errorf("tmux is not installed on %s", host)
 	}
-	return fmt.Errorf("cannot reach %s. Check your connection or run \"devbox connect\"", host)
+	return fmt.Errorf("cannot reach %s. Check your connection or run \"devbox profile\"", host)
 }
 
 // handleExecErr classifies a failed interactive Exec. Output went straight to
