@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/hien/devbox/internal/validate"
+	"github.com/hiennguyenle/devbox/internal/validate"
 	"gopkg.in/yaml.v3"
 )
 

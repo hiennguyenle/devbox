@@ -1,4 +1,4 @@
-module github.com/hien/devbox
+module github.com/hiennguyenle/devbox
 
 go 1.24.0
 

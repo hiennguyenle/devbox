@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/hien/devbox/internal/tmux"
+	"github.com/hiennguyenle/devbox/internal/tmux"
 	"github.com/spf13/cobra"
 )
 

@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hien/devbox/internal/config"
-	"github.com/hien/devbox/internal/validate"
+	"github.com/hiennguyenle/devbox/internal/config"
+	"github.com/hiennguyenle/devbox/internal/validate"
 	"github.com/spf13/cobra"
 )
 

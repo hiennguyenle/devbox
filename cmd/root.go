@@ -7,9 +7,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/hien/devbox/internal/config"
-	sshpkg "github.com/hien/devbox/internal/ssh"
-	"github.com/hien/devbox/internal/tmux"
+	"github.com/hiennguyenle/devbox/internal/config"
+	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
+	"github.com/hiennguyenle/devbox/internal/tmux"
 	"github.com/spf13/cobra"
 )
 

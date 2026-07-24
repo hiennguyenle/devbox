@@ -6,10 +6,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hien/devbox/internal/config"
-	sshpkg "github.com/hien/devbox/internal/ssh"
-	"github.com/hien/devbox/internal/tmux"
-	"github.com/hien/devbox/internal/validate"
+	"github.com/hiennguyenle/devbox/internal/config"
+	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
+	"github.com/hiennguyenle/devbox/internal/tmux"
+	"github.com/hiennguyenle/devbox/internal/validate"
 	"github.com/spf13/cobra"
 )
 

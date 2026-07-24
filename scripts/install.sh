@@ -13,7 +13,7 @@ fi
 VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || echo "dev")
 
 echo "Building devbox $VERSION..."
-go build -ldflags "-s -w -X github.com/hien/devbox/cmd.version=$VERSION" -o "$REPO_DIR/devbox" "$REPO_DIR"
+go build -ldflags "-s -w -X github.com/hiennguyenle/devbox/cmd.version=$VERSION" -o "$REPO_DIR/devbox" "$REPO_DIR"
 
 mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/devbox" "$INSTALL_DIR/devbox"

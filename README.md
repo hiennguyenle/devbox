@@ -7,13 +7,24 @@ terminal sessions (Claude Code, Codex, builds) alive across network changes.
 
 ### From GitHub Releases
 
-Download the latest binary for your platform from [Releases](https://github.com/hien/devbox/releases).
+Download the latest binary for your platform from [Releases](https://github.com/hiennguyenle/devbox/releases).
 
-### From Source
+### With go install
 
 ```bash
-go install github.com/hien/devbox@latest
+go install github.com/hiennguyenle/devbox@latest
 ```
+
+### From a clone
+
+```bash
+git clone https://github.com/hiennguyenle/devbox.git
+cd devbox
+./scripts/install.sh
+```
+
+This stamps the binary with the current git tag and installs it to
+`~/.local/bin`. Set `INSTALL_DIR` to install somewhere else.
 
 ## Setup
 
@@ -23,7 +34,20 @@ Configure your remote host:
 devbox connect
 ```
 
-This prompts for SSH host, user, and port, tests the connection, and saves the config to `~/.config/devbox/config.yaml`.
+This prompts for SSH host (required), user (defaults to your local username),
+and port (defaults to 22), then tests the connection and writes
+`~/.config/devbox/config.yaml`. If the test fails it asks whether to save the
+config anyway.
+
+```yaml
+host: dev.example.com
+user: hien
+port: 22
+default_session: work
+```
+
+`default_session` is the session bare `devbox` attaches to. Edit it by hand —
+re-running `devbox connect` preserves whatever you set.
 
 ## Usage
 
@@ -41,6 +65,8 @@ devbox shell            # raw SSH, no tmux
 devbox version          # print version
 devbox help             # print usage
 ```
+
+Add `-v` / `--verbose` to any command to print the SSH command being executed.
 
 ## Auto-Reconnect
 
@@ -63,11 +89,14 @@ whole time.
 ## Session Tracking
 
 Each terminal remembers which tmux session it was last attached to (keyed by
-TTY). Running `devbox resume` without a name opens the session picker with
-that session pre-selected. Killing a session also clears any terminal
-records pointing at it.
+TTY, stored in `~/.config/devbox/sessions/`). Running `devbox resume` without
+a name opens the session picker with that session pre-selected. Killing a
+session also clears any terminal records pointing at it.
 
 ## Requirements
 
 - Remote host must have `tmux` installed
 - Local machine must have `ssh` in PATH
+- Go 1.24+ to build from source (not needed for release binaries)
+- Key-based SSH auth (agent or key file). devbox reconnects unattended, so
+  password auth means a prompt on every reconnect.

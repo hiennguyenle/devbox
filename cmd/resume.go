@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"github.com/hien/devbox/internal/config"
-	"github.com/hien/devbox/internal/tmux"
-	"github.com/hien/devbox/internal/validate"
+	"github.com/hiennguyenle/devbox/internal/config"
+	"github.com/hiennguyenle/devbox/internal/tmux"
+	"github.com/hiennguyenle/devbox/internal/validate"
 	"github.com/spf13/cobra"
 )
 

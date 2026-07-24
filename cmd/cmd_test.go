@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hien/devbox/internal/config"
-	sshpkg "github.com/hien/devbox/internal/ssh"
+	"github.com/hiennguyenle/devbox/internal/config"
+	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
 )
 
 // exitWith produces a real *exec.ExitError with the given code.
