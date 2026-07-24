@@ -51,6 +51,10 @@ reattaches to the same tmux session. Your remote processes keep running the
 whole time.
 
 - Reconnect retries forever until you press `Ctrl+C`.
+- While waiting, devbox probes the host's SSH port every 2s; the moment the
+  network comes back it reconnects immediately instead of waiting out the
+  backoff timer.
+- A dead connection is detected within ~30s (keepalives every 10s).
 - Only connection failures trigger reconnect; real errors (tmux not
   installed, bad session name) are reported immediately.
 - After a stable connection, the backoff resets, so the next drop reconnects

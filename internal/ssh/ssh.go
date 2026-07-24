@@ -3,9 +3,11 @@ package ssh
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,7 +25,7 @@ func (c *Client) buildArgs(interactive bool, remoteCmd string) []string {
 		args = append(args, "-t")
 	}
 	args = append(args, "-o", "ConnectTimeout=10")
-	args = append(args, "-o", "ServerAliveInterval=30")
+	args = append(args, "-o", "ServerAliveInterval=10")
 	args = append(args, "-o", "ServerAliveCountMax=3")
 	args = append(args, "-p", fmt.Sprintf("%d", c.Port))
 	args = append(args, fmt.Sprintf("%s@%s", c.User, c.Host))
@@ -103,6 +105,7 @@ func (c *Client) Exec(remoteCmd string) error {
 	defer signal.Stop(sigCh)
 
 	tty := isTerminal(os.Stderr)
+	probe := func() bool { return probeReachable(c.Host, c.Port, time.Second) }
 	attempt := 0
 	for {
 		cmd := exec.Command("ssh", args...)
@@ -121,11 +124,55 @@ func (c *Client) Exec(remoteCmd string) error {
 		attempt = nextAttempt(attempt, time.Since(start))
 		delay := reconnectDelay(attempt)
 
-		if spinWait(delay, c.Host, sigCh, tty) {
+		if spinWait(delay, c.Host, sigCh, tty, probe) {
 			if tty {
 				fmt.Fprintf(os.Stderr, "\r\033[K")
 			}
 			return nil
+		}
+	}
+}
+
+// probeInterval is how often spinWait checks whether the host's SSH port is
+// reachable again. A var so tests can shrink it.
+var probeInterval = 2 * time.Second
+
+// probeReachable reports whether a TCP connection to host:port succeeds
+// within timeout.
+func probeReachable(host string, port int, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// watchNetwork probes until the network transitions from down to up, then
+// signals upCh. Requiring an observed DOWN first means an ssh failure on a
+// reachable host (auth, host key) still backs off normally instead of
+// hammering the server in a tight loop.
+func watchNetwork(probe func() bool, upCh chan<- struct{}, stop <-chan struct{}) {
+	ticker := time.NewTicker(probeInterval)
+	defer ticker.Stop()
+
+	sawDown := false
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if !probe() {
+				sawDown = true
+				continue
+			}
+			if sawDown {
+				select {
+				case upCh <- struct{}{}:
+				case <-stop:
+				}
+				return
+			}
 		}
 	}
 }
@@ -154,14 +201,25 @@ func isTerminal(f *os.File) bool {
 }
 
 // spinWait waits out the reconnect delay, showing an animated spinner on
-// terminals or a single plain line otherwise. Returns true if cancelled by
+// terminals or a single plain line otherwise. It ends early when probe
+// observes the network coming back (down → up), so reattach is immediate
+// instead of sitting out the full backoff. Returns true if cancelled by
 // Ctrl+C.
-func spinWait(delay time.Duration, host string, sigCh <-chan os.Signal, tty bool) bool {
+func spinWait(delay time.Duration, host string, sigCh <-chan os.Signal, tty bool, probe func() bool) bool {
+	upCh := make(chan struct{})
+	stop := make(chan struct{})
+	defer close(stop)
+	if probe != nil {
+		go watchNetwork(probe, upCh, stop)
+	}
+
 	if !tty {
 		fmt.Fprintf(os.Stderr, "Reconnecting to %s...\n", host)
 		select {
 		case <-sigCh:
 			return true
+		case <-upCh:
+			return false
 		case <-time.After(delay):
 			return false
 		}
@@ -181,6 +239,9 @@ func spinWait(delay time.Duration, host string, sigCh <-chan os.Signal, tty bool
 		select {
 		case <-sigCh:
 			return true
+		case <-upCh:
+			fmt.Fprintf(os.Stderr, "\r\033[K")
+			return false
 		case <-deadline:
 			fmt.Fprintf(os.Stderr, "\r\033[K")
 			return false

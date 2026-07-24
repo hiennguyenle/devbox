@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -76,7 +77,7 @@ func TestNextAttempt_ResetsAfterStableSession(t *testing.T) {
 
 func TestSpinWait_NonTTYTimesOut(t *testing.T) {
 	sigCh := make(chan os.Signal)
-	if cancelled := spinWait(10*time.Millisecond, "myhost", sigCh, false); cancelled {
+	if cancelled := spinWait(10*time.Millisecond, "myhost", sigCh, false, nil); cancelled {
 		t.Error("expected timeout, got cancelled")
 	}
 }
@@ -84,8 +85,81 @@ func TestSpinWait_NonTTYTimesOut(t *testing.T) {
 func TestSpinWait_NonTTYCancelsOnSignal(t *testing.T) {
 	sigCh := make(chan os.Signal, 1)
 	sigCh <- os.Interrupt
-	if cancelled := spinWait(time.Minute, "myhost", sigCh, false); !cancelled {
+	if cancelled := spinWait(time.Minute, "myhost", sigCh, false, nil); !cancelled {
 		t.Error("expected cancellation on signal")
+	}
+}
+
+func TestProbeReachable_OpenPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	if !probeReachable("127.0.0.1", port, time.Second) {
+		t.Error("open port should be reachable")
+	}
+}
+
+func TestProbeReachable_ClosedPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	if probeReachable("127.0.0.1", port, 200*time.Millisecond) {
+		t.Error("closed port should not be reachable")
+	}
+}
+
+func TestSpinWait_ReconnectsEarlyWhenNetworkReturns(t *testing.T) {
+	// Network was down (first probe fails) then comes back: the wait must
+	// end immediately instead of sitting out the full backoff delay.
+	origInterval := probeInterval
+	probeInterval = 5 * time.Millisecond
+	t.Cleanup(func() { probeInterval = origInterval })
+
+	calls := 0
+	probe := func() bool {
+		calls++
+		return calls > 1 // down once, then back up
+	}
+
+	sigCh := make(chan os.Signal)
+	start := time.Now()
+	cancelled := spinWait(10*time.Second, "myhost", sigCh, false, probe)
+	elapsed := time.Since(start)
+
+	if cancelled {
+		t.Error("early reconnect should not report cancellation")
+	}
+	if elapsed > time.Second {
+		t.Errorf("waited %v; network return should end the wait early", elapsed)
+	}
+}
+
+func TestSpinWait_NoEarlyExitWithoutDownUpTransition(t *testing.T) {
+	// Host reachable the whole time (e.g. ssh failing for auth reasons):
+	// never short-circuit the backoff, or we'd hammer the host in a tight loop.
+	origInterval := probeInterval
+	probeInterval = 5 * time.Millisecond
+	t.Cleanup(func() { probeInterval = origInterval })
+
+	probe := func() bool { return true }
+
+	sigCh := make(chan os.Signal)
+	delay := 150 * time.Millisecond
+	start := time.Now()
+	cancelled := spinWait(delay, "myhost", sigCh, false, probe)
+	elapsed := time.Since(start)
+
+	if cancelled {
+		t.Error("expected timeout, got cancelled")
+	}
+	if elapsed < delay {
+		t.Errorf("waited only %v; always-reachable host must not end the wait early", elapsed)
 	}
 }
 
@@ -104,28 +178,28 @@ func TestIsTerminal_FalseForPipe(t *testing.T) {
 func TestBuildArgs_BasicHost(t *testing.T) {
 	c := Client{Host: "builder-104", User: "hien", Port: 22}
 	got := c.buildArgs(false, "tmux list-sessions")
-	want := []string{"-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-p", "22", "hien@builder-104", "tmux list-sessions"}
+	want := []string{"-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-p", "22", "hien@builder-104", "tmux list-sessions"}
 	assertSliceEqual(t, got, want)
 }
 
 func TestBuildArgs_Interactive(t *testing.T) {
 	c := Client{Host: "builder-104", User: "hien", Port: 22}
 	got := c.buildArgs(true, "tmux new -A -s work")
-	want := []string{"-t", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-p", "22", "hien@builder-104", "tmux new -A -s work"}
+	want := []string{"-t", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-p", "22", "hien@builder-104", "tmux new -A -s work"}
 	assertSliceEqual(t, got, want)
 }
 
 func TestBuildArgs_NoCommand(t *testing.T) {
 	c := Client{Host: "builder-104", User: "hien", Port: 22}
 	got := c.buildArgs(true, "")
-	want := []string{"-t", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-p", "22", "hien@builder-104"}
+	want := []string{"-t", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-p", "22", "hien@builder-104"}
 	assertSliceEqual(t, got, want)
 }
 
 func TestBuildArgs_CustomPort(t *testing.T) {
 	c := Client{Host: "myhost", User: "admin", Port: 2222}
 	got := c.buildArgs(false, "tmux list-sessions")
-	want := []string{"-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-p", "2222", "admin@myhost", "tmux list-sessions"}
+	want := []string{"-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3", "-p", "2222", "admin@myhost", "tmux list-sessions"}
 	assertSliceEqual(t, got, want)
 }
 
