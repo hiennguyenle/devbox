@@ -33,7 +33,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		saveCurrentSession(name)
-		return client.Exec(tmux.NewAttachSession(name))
+		return handleExecErr(client.Exec(tmux.NewAttachSession(name)), cfg.Host)
 	}
 
 	// No name — interactive picker, pre-select terminal's last session

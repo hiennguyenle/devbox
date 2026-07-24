@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"time"
 
 	"github.com/hien/devbox/internal/tmux"
 	"github.com/hien/devbox/internal/validate"
@@ -40,11 +42,15 @@ func runNew(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Creating session %q...\n", name)
 	saveCurrentSession(name)
 
-	return client.Exec(tmux.NewAttachSession(name))
+	return handleExecErr(client.Exec(tmux.NewAttachSession(name)), cfg.Host)
 }
 
 func generateSessionID() string {
 	b := make([]byte, 4)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand should never fail; fall back to a time-derived id
+		// rather than the all-zero buffer
+		binary.LittleEndian.PutUint32(b, uint32(time.Now().UnixNano()))
+	}
 	return fmt.Sprintf("s-%x", b)
 }

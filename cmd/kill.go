@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hien/devbox/internal/config"
+	sshpkg "github.com/hien/devbox/internal/ssh"
 	"github.com/hien/devbox/internal/tmux"
 	"github.com/hien/devbox/internal/validate"
 	"github.com/spf13/cobra"
@@ -39,19 +41,16 @@ func runKill(cmd *cobra.Command, args []string) error {
 	}
 
 	// Interactive mode
-	output, err := client.Run(tmux.ListSessions())
-	if err != nil || strings.TrimSpace(output) == "" {
-		fmt.Printf("No active sessions on %s.\n", cfg.Host)
-		return nil
+	sessions, err := listSessionsForPicker(client, cfg.Host)
+	if err != nil {
+		return err
 	}
-
-	sessions := parseSessions(output)
 	if len(sessions) == 0 {
 		fmt.Printf("No active sessions on %s.\n", cfg.Host)
 		return nil
 	}
 
-	model := killPickerModel{sessions: sessions, host: cfg.Host}
+	model := killPickerModel{client: client, host: cfg.Host, sessions: sessions}
 	p := tea.NewProgram(model)
 	result, err := p.Run()
 	if err != nil {
@@ -66,29 +65,45 @@ func runKill(cmd *cobra.Command, args []string) error {
 	for _, name := range final.killed {
 		fmt.Printf("Killed %q\n", name)
 	}
+	if final.failed != "" {
+		return fmt.Errorf("failed to kill %q", final.failed)
+	}
 	return nil
 }
 
-func killSession(client interface{ Run(string) (string, error) }, host, name string) error {
+func killSession(client sshpkg.Executor, host, name string) error {
 	output, err := client.Run(tmux.KillSession(name))
 	if err != nil {
 		if output != "" {
 			return fmt.Errorf("kill session %q: %s", name, output)
 		}
-		return handleSSHError(err, host)
+		return handleSSHError(output, err, host)
 	}
-	fmt.Printf("Session %q killed.\n", name)
+	config.DeleteSessionsByName(config.SessionsDir(), name)
+	fmt.Printf("Killed %q\n", name)
 	return nil
 }
 
-// killPickerModel is the bubbletea model for interactive kill.
+// killResultMsg is delivered back to the picker when an async kill finishes.
+type killResultMsg struct {
+	name      string
+	err       error
+	quitAfter bool
+}
+
+// killPickerModel is the bubbletea model for interactive kill. Kills run as
+// tea.Cmds so a slow SSH round-trip never freezes the UI.
 type killPickerModel struct {
-	sessions []sessionItem
-	cursor   int
-	killed   []string
-	host     string
-	quitting bool
-	status   string // status message after an action
+	client      sshpkg.Executor
+	host        string
+	sessions    []sessionItem
+	cursor      int
+	killed      []string
+	failed      string // last session a kill failed for, surfaced after quit
+	quitting    bool
+	inflight    bool
+	quitPending bool   // user asked to quit while a kill was in flight
+	status      string // status message after an action
 }
 
 func (m killPickerModel) Init() tea.Cmd {
@@ -98,6 +113,16 @@ func (m killPickerModel) Init() tea.Cmd {
 func (m killPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.inflight {
+			// One kill at a time. Quit requests are deferred until the
+			// result arrives: the remote kill already ran, so cleanup and
+			// reporting must still happen.
+			if s := msg.String(); s == "ctrl+c" || s == "esc" {
+				m.quitPending = true
+				m.status = "Finishing..."
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			m.quitting = true
@@ -112,46 +137,62 @@ func (m killPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "x":
 			if len(m.sessions) > 0 {
-				m = m.killCurrent()
+				return m.startKill(false)
 			}
 		case "enter":
 			if len(m.sessions) > 0 {
-				m = m.killCurrent()
-				m.quitting = true
-				return m, tea.Quit
+				return m.startKill(true)
 			}
 		}
+	case killResultMsg:
+		return m.finishKill(msg)
 	}
 	return m, nil
 }
 
-func (m killPickerModel) killCurrent() killPickerModel {
+// startKill dispatches the SSH kill for the session under the cursor as an
+// async tea.Cmd.
+func (m killPickerModel) startKill(quitAfter bool) (tea.Model, tea.Cmd) {
 	name := m.sessions[m.cursor].name
-
-	// Kill via SSH
-	cfg, err := requireConfig()
-	if err != nil {
-		m.status = fmt.Sprintf("Error: %v", err)
-		return m
+	m.inflight = true
+	m.status = fmt.Sprintf("Killing %q...", name)
+	client := m.client
+	return m, func() tea.Msg {
+		_, err := client.Run(tmux.KillSession(name))
+		return killResultMsg{name: name, err: err, quitAfter: quitAfter}
 	}
-	client := newClient(cfg)
-	_, err = client.Run(tmux.KillSession(name))
-	if err != nil {
-		m.status = fmt.Sprintf("Failed to kill %q", name)
-		return m
+}
+
+func (m killPickerModel) finishKill(msg killResultMsg) (tea.Model, tea.Cmd) {
+	m.inflight = false
+	if msg.err != nil {
+		m.status = fmt.Sprintf("Failed to kill %q", msg.name)
+		m.failed = msg.name
+		if msg.quitAfter || m.quitPending {
+			m.quitting = true
+			return m, tea.Quit
+		}
+		return m, nil
 	}
 
-	m.killed = append(m.killed, name)
-	m.sessions = append(m.sessions[:m.cursor], m.sessions[m.cursor+1:]...)
+	config.DeleteSessionsByName(config.SessionsDir(), msg.name)
+	m.killed = append(m.killed, msg.name)
+	for i, s := range m.sessions {
+		if s.name == msg.name {
+			m.sessions = append(m.sessions[:i], m.sessions[i+1:]...)
+			break
+		}
+	}
 	if m.cursor >= len(m.sessions) && m.cursor > 0 {
 		m.cursor--
 	}
-	m.status = fmt.Sprintf("Killed %q", name)
+	m.status = fmt.Sprintf("Killed %q", msg.name)
 
-	if len(m.sessions) == 0 {
+	if msg.quitAfter || m.quitPending || len(m.sessions) == 0 {
 		m.quitting = true
+		return m, tea.Quit
 	}
-	return m
+	return m, nil
 }
 
 var (

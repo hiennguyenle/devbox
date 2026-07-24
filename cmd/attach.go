@@ -106,20 +106,41 @@ func parseSessions(output string) []sessionItem {
 	return items
 }
 
+// isNoServerOutput reports whether a failed list-sessions just means "no
+// sessions yet". tmux prints "no server running" after its server has exited,
+// but "error connecting to <socket> (No such file or directory)" on a box
+// where the server never started at all.
+func isNoServerOutput(output string) bool {
+	return strings.Contains(output, "no server running") ||
+		strings.Contains(output, "error connecting to") ||
+		strings.Contains(output, "no sessions")
+}
+
+// listSessionsForPicker fetches remote sessions for the interactive pickers.
+// "no sessions yet" returns an empty slice; a transport failure returns an
+// error instead of masquerading as an empty list.
+func listSessionsForPicker(client sshpkg.Executor, host string) ([]sessionItem, error) {
+	output, err := client.Run(tmux.ListSessions())
+	if err != nil {
+		if isNoServerOutput(output) {
+			return nil, nil
+		}
+		return nil, handleSSHError(output, err, host)
+	}
+	return parseSessions(output), nil
+}
+
 // runAttachPicker shows an interactive session picker. preSelect is the session
 // name to highlight initially (e.g. the terminal's last session), or "" for default.
-func runAttachPicker(cfg *config.Config, client *sshpkg.Client, preSelect string) error {
-	output, err := client.Run(tmux.ListSessions())
-	if err != nil || strings.TrimSpace(output) == "" {
+func runAttachPicker(cfg *config.Config, client sshpkg.Executor, preSelect string) error {
+	sessions, err := listSessionsForPicker(client, cfg.Host)
+	if err != nil {
+		return err
+	}
+	if len(sessions) == 0 {
 		fmt.Println("No sessions available. Creating default session...")
 		saveCurrentSession(cfg.DefaultSession)
-		return client.Exec(tmux.NewAttachSession(cfg.DefaultSession))
-	}
-
-	sessions := parseSessions(output)
-	if len(sessions) == 0 {
-		saveCurrentSession(cfg.DefaultSession)
-		return client.Exec(tmux.NewAttachSession(cfg.DefaultSession))
+		return handleExecErr(client.Exec(tmux.NewAttachSession(cfg.DefaultSession)), cfg.Host)
 	}
 
 	// Pre-select the cursor to the last used session if known
@@ -149,5 +170,5 @@ func runAttachPicker(cfg *config.Config, client *sshpkg.Client, preSelect string
 	}
 
 	saveCurrentSession(final.chosen)
-	return client.Exec(tmux.NewAttachSession(final.chosen))
+	return handleExecErr(client.Exec(tmux.NewAttachSession(final.chosen)), cfg.Host)
 }

@@ -39,7 +39,7 @@ func runRename(cmd *cobra.Command, args []string) error {
 		if output != "" {
 			return fmt.Errorf("rename session: %s", output)
 		}
-		return handleSSHError(err, cfg.Host)
+		return handleSSHError(output, err, cfg.Host)
 	}
 
 	fmt.Printf("Session %q renamed to %q.\n", oldName, newName)

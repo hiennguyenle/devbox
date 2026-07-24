@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"errors"
+	"os/exec"
+
 	"github.com/spf13/cobra"
 )
 
@@ -21,5 +24,12 @@ func runShell(cmd *cobra.Command, args []string) error {
 	}
 
 	client := newClient(cfg)
-	return client.Exec("")
+	err = client.Exec("")
+	// In a raw shell the exit status belongs to the user (`exit 1` is not a
+	// devbox failure); only surface non-exit errors like a missing ssh binary.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return nil
+	}
+	return err
 }

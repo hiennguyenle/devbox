@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/hien/devbox/internal/tmux"
 	"github.com/spf13/cobra"
@@ -27,11 +26,11 @@ func runList(cmd *cobra.Command, args []string) error {
 	client := newClient(cfg)
 	output, err := client.Run(tmux.ListSessions())
 	if err != nil {
-		if strings.Contains(output, "no server running") || strings.Contains(output, "no sessions") {
+		if isNoServerOutput(output) {
 			fmt.Printf("No active sessions on %s.\n", cfg.Host)
 			return nil
 		}
-		return handleSSHError(err, cfg.Host)
+		return handleSSHError(output, err, cfg.Host)
 	}
 
 	fmt.Println(output)

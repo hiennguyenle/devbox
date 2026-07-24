@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/hien/devbox/internal/config"
+	"github.com/hien/devbox/internal/validate"
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +34,9 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if host == "" {
 		return fmt.Errorf("host is required")
 	}
+	if err := validate.Host(host); err != nil {
+		return err
+	}
 
 	// User (optional)
 	defaultUser := "root"
@@ -44,6 +48,9 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	sshUser = strings.TrimSpace(sshUser)
 	if sshUser == "" {
 		sshUser = defaultUser
+	}
+	if err := validate.User(sshUser); err != nil {
+		return err
 	}
 
 	// Port (optional)
@@ -89,7 +96,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		Host:           host,
 		User:           sshUser,
 		Port:           port,
-		DefaultSession: "work",
+		DefaultSession: preservedDefaultSession(),
 	}
 
 	if err := config.Save(cfg, config.Path()); err != nil {
@@ -98,4 +105,15 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Config saved to %s\n", config.Path())
 	return nil
+}
+
+// preservedDefaultSession keeps a customized default_session across
+// re-runs of connect instead of silently resetting it to "work".
+func preservedDefaultSession() string {
+	if config.Exists() {
+		if cfg, err := config.LoadDefault(); err == nil && cfg.DefaultSession != "" {
+			return cfg.DefaultSession
+		}
+	}
+	return "work"
 }
