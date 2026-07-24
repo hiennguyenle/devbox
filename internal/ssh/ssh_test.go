@@ -1,6 +1,105 @@
 package ssh
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"strconv"
+	"testing"
+	"time"
+)
+
+// runExit produces a real *exec.ExitError with the given code.
+func runExit(t *testing.T, code int) error {
+	t.Helper()
+	return exec.Command("sh", "-c", "exit "+strconv.Itoa(code)).Run()
+}
+
+func TestClassifyExit_CleanExit(t *testing.T) {
+	action, err := classifyExit(nil)
+	if action != actionDone || err != nil {
+		t.Errorf("nil error: got (%v, %v), want (actionDone, nil)", action, err)
+	}
+}
+
+func TestClassifyExit_TransportFailureReconnects(t *testing.T) {
+	// ssh reserves 255 for its own failures (connection lost, unreachable)
+	action, err := classifyExit(runExit(t, 255))
+	if action != actionReconnect || err != nil {
+		t.Errorf("exit 255: got (%v, %v), want (actionReconnect, nil)", action, err)
+	}
+}
+
+func TestClassifyExit_RemoteCommandFailureFails(t *testing.T) {
+	// 127 = remote "command not found" (e.g. tmux missing); must NOT reconnect
+	action, err := classifyExit(runExit(t, 127))
+	if action != actionFail || err == nil {
+		t.Errorf("exit 127: got (%v, %v), want (actionFail, non-nil)", action, err)
+	}
+
+	// generic remote failure must not reconnect either
+	action, err = classifyExit(runExit(t, 1))
+	if action != actionFail || err == nil {
+		t.Errorf("exit 1: got (%v, %v), want (actionFail, non-nil)", action, err)
+	}
+}
+
+func TestClassifyExit_CtrlCIsClean(t *testing.T) {
+	action, err := classifyExit(runExit(t, 130))
+	if action != actionDone || err != nil {
+		t.Errorf("exit 130: got (%v, %v), want (actionDone, nil)", action, err)
+	}
+}
+
+func TestClassifyExit_SpawnFailureFails(t *testing.T) {
+	// ssh binary missing locally → *exec.Error, not *exec.ExitError.
+	// Must surface the error, never enter the reconnect loop.
+	spawnErr := exec.Command("/nonexistent/ssh-binary").Run()
+	action, err := classifyExit(spawnErr)
+	if action != actionFail || err == nil {
+		t.Errorf("spawn failure: got (%v, %v), want (actionFail, non-nil)", action, err)
+	}
+}
+
+func TestNextAttempt_IncrementsOnQuickDrop(t *testing.T) {
+	if got := nextAttempt(5, 2*time.Second); got != 6 {
+		t.Errorf("quick drop: got %d, want 6", got)
+	}
+}
+
+func TestNextAttempt_ResetsAfterStableSession(t *testing.T) {
+	// A connection that held for a while means the earlier outage is over;
+	// the backoff ladder must restart so the next reconnect is fast again.
+	if got := nextAttempt(20, stableSession+time.Second); got != 1 {
+		t.Errorf("stable session: got %d, want 1", got)
+	}
+}
+
+func TestSpinWait_NonTTYTimesOut(t *testing.T) {
+	sigCh := make(chan os.Signal)
+	if cancelled := spinWait(10*time.Millisecond, "myhost", sigCh, false); cancelled {
+		t.Error("expected timeout, got cancelled")
+	}
+}
+
+func TestSpinWait_NonTTYCancelsOnSignal(t *testing.T) {
+	sigCh := make(chan os.Signal, 1)
+	sigCh <- os.Interrupt
+	if cancelled := spinWait(time.Minute, "myhost", sigCh, false); !cancelled {
+		t.Error("expected cancellation on signal")
+	}
+}
+
+func TestIsTerminal_FalseForPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	if isTerminal(w) {
+		t.Error("pipe should not be detected as a terminal")
+	}
+}
 
 func TestBuildArgs_BasicHost(t *testing.T) {
 	c := Client{Host: "builder-104", User: "hien", Port: 22}

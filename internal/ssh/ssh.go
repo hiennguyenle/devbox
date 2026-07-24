@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,8 +43,54 @@ func (c *Client) Run(remoteCmd string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// Exec runs an interactive SSH session with auto-reconnect.
-// On connection failure, it retries with backoff until the user presses Ctrl+C.
+type exitAction int
+
+const (
+	actionDone      exitAction = iota // clean exit: return nil
+	actionReconnect                   // transport failure: retry with backoff
+	actionFail                        // real error: surface it, never retry
+)
+
+// classifyExit decides what Exec does after ssh exits. ssh reserves exit
+// code 255 for its own failures (connection lost, host unreachable); every
+// other code is the remote command's exit status and must not trigger a
+// reconnect.
+func classifyExit(err error) (exitAction, error) {
+	if err == nil {
+		return actionDone, nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return actionFail, fmt.Errorf("cannot run ssh: %w", err)
+	}
+	switch exitErr.ExitCode() {
+	case 130: // Ctrl+C
+		return actionDone, nil
+	case -1: // killed by a local signal — user-driven, don't respin
+		return actionDone, nil
+	case 255:
+		return actionReconnect, nil
+	default:
+		return actionFail, err
+	}
+}
+
+// stableSession is how long a connection must hold before a subsequent drop
+// restarts the backoff ladder instead of continuing where it left off.
+const stableSession = 30 * time.Second
+
+func nextAttempt(prev int, connected time.Duration) int {
+	if connected >= stableSession {
+		return 1
+	}
+	return prev + 1
+}
+
+// Exec runs an interactive SSH session with auto-reconnect. Reconnection is
+// intentionally unbounded: the whole point is to survive network roaming
+// (office → home) and reattach whenever connectivity returns. Only transport
+// failures retry; remote command errors surface immediately, and Ctrl+C
+// during the wait cancels.
 func (c *Client) Exec(remoteCmd string) error {
 	args := c.buildArgs(true, remoteCmd)
 	if c.Verbose {
@@ -55,6 +102,7 @@ func (c *Client) Exec(remoteCmd string) error {
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
 
+	tty := isTerminal(os.Stderr)
 	attempt := 0
 	for {
 		cmd := exec.Command("ssh", args...)
@@ -62,30 +110,21 @@ func (c *Client) Exec(remoteCmd string) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
-		err := cmd.Run()
+		start := time.Now()
+		runErr := cmd.Run()
 
-		// Clean exit (user detached from tmux or exited shell)
-		if err == nil {
-			return nil
+		action, err := classifyExit(runErr)
+		if action != actionReconnect {
+			return err
 		}
 
-		// Check if user intentionally exited (exit code 0 means clean)
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			code := exitErr.ExitCode()
-			// Exit code 0 = clean exit, don't reconnect
-			// Exit code 130 = Ctrl+C, don't reconnect
-			if code == 0 || code == 130 {
-				return nil
-			}
-		}
-
-		// Connection failure — auto-reconnect with spinner
-		attempt++
+		attempt = nextAttempt(attempt, time.Since(start))
 		delay := reconnectDelay(attempt)
 
-		cancelled := spinWait(delay, c.Host, sigCh)
-		if cancelled {
-			fmt.Fprintf(os.Stderr, "\r\033[K")
+		if spinWait(delay, c.Host, sigCh, tty) {
+			if tty {
+				fmt.Fprintf(os.Stderr, "\r\033[K")
+			}
 			return nil
 		}
 	}
@@ -104,9 +143,30 @@ func reconnectDelay(attempt int) time.Duration {
 	}
 }
 
-// spinWait shows an animated spinner while waiting to reconnect.
-// Returns true if cancelled by Ctrl+C.
-func spinWait(delay time.Duration, host string, sigCh <-chan os.Signal) bool {
+// isTerminal reports whether f is a character device, so ANSI spinner codes
+// only reach real terminals.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// spinWait waits out the reconnect delay, showing an animated spinner on
+// terminals or a single plain line otherwise. Returns true if cancelled by
+// Ctrl+C.
+func spinWait(delay time.Duration, host string, sigCh <-chan os.Signal, tty bool) bool {
+	if !tty {
+		fmt.Fprintf(os.Stderr, "Reconnecting to %s...\n", host)
+		select {
+		case <-sigCh:
+			return true
+		case <-time.After(delay):
+			return false
+		}
+	}
+
 	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	ticker := time.NewTicker(80 * time.Millisecond)
 	defer ticker.Stop()
@@ -115,7 +175,6 @@ func spinWait(delay time.Duration, host string, sigCh <-chan os.Signal) bool {
 	frame := 0
 
 	for {
-		// Show spinner
 		fmt.Fprintf(os.Stderr, "\r\033[K  %s Reconnecting to %s...", frames[frame%len(frames)], host)
 		frame++
 
