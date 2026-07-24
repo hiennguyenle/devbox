@@ -4,6 +4,11 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+if ! command -v go >/dev/null 2>&1; then
+    echo "Error: go is not installed. Install it from https://go.dev/dl/" >&2
+    exit 1
+fi
+
 # Get version from git tag, fallback to "dev"
 VERSION=$(git -C "$REPO_DIR" describe --tags --always 2>/dev/null || echo "dev")
 
