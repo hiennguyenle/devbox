@@ -166,6 +166,22 @@ func TestExecTmuxSession_PrintsResumeHintOnCleanExit(t *testing.T) {
 	}
 }
 
+func TestExecTmuxSession_PrintsResumeHintOnceOnDisconnect(t *testing.T) {
+	mock := &sshpkg.MockExecutor{DisconnectOnExec: true}
+	var runErr error
+
+	out := captureStdout(t, func() {
+		runErr = execTmuxSession(mock, "myhost", "api")
+	})
+
+	if runErr != nil {
+		t.Fatalf("execTmuxSession: %v", runErr)
+	}
+	if want := "To continue this session, run devbox resume api\n"; out != want {
+		t.Errorf("stdout = %q, want one disconnect hint %q", out, want)
+	}
+}
+
 func TestExecTmuxSession_DoesNotPrintHintOnFailure(t *testing.T) {
 	mock := &sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}
 	var runErr error

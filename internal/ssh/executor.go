@@ -8,6 +8,7 @@ type Executor interface {
 	Run(remoteCmd string) (string, error)
 
 	// Exec runs an interactive SSH session in the foreground, auto-reconnecting
-	// on transport failure until the session ends cleanly.
-	Exec(remoteCmd string) error
+	// on transport failure until the session ends cleanly. onDisconnect, when
+	// non-nil, is called once after the first transport failure.
+	Exec(remoteCmd string, onDisconnect func()) error
 }

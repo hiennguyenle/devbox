@@ -77,6 +77,17 @@ func classifyExit(err error) (exitAction, error) {
 	}
 }
 
+func classifyExitWithDisconnect(err error, onDisconnect func(), notified *bool) (exitAction, error) {
+	action, classifiedErr := classifyExit(err)
+	if action == actionReconnect && !*notified {
+		if onDisconnect != nil {
+			onDisconnect()
+		}
+		*notified = true
+	}
+	return action, classifiedErr
+}
+
 // stableSession is how long a connection must hold before a subsequent drop
 // restarts the backoff ladder instead of continuing where it left off.
 const stableSession = 30 * time.Second
@@ -93,7 +104,7 @@ func nextAttempt(prev int, connected time.Duration) int {
 // (office → home) and reattach whenever connectivity returns. Only transport
 // failures retry; remote command errors surface immediately, and Ctrl+C
 // during the wait cancels.
-func (c *Client) Exec(remoteCmd string) error {
+func (c *Client) Exec(remoteCmd string, onDisconnect func()) error {
 	args := c.buildArgs(true, remoteCmd)
 	if c.Verbose {
 		fmt.Fprintf(os.Stderr, "ssh %s\n", strings.Join(args, " "))
@@ -107,6 +118,7 @@ func (c *Client) Exec(remoteCmd string) error {
 	tty := isTerminal(os.Stderr)
 	probe := func() bool { return probeReachable(c.Host, c.Port, time.Second) }
 	attempt := 0
+	disconnectNotified := false
 	for {
 		cmd := exec.Command("ssh", args...)
 		cmd.Stdin = os.Stdin
@@ -116,7 +128,7 @@ func (c *Client) Exec(remoteCmd string) error {
 		start := time.Now()
 		runErr := cmd.Run()
 
-		action, err := classifyExit(runErr)
+		action, err := classifyExitWithDisconnect(runErr, onDisconnect, &disconnectNotified)
 		if action != actionReconnect {
 			return err
 		}

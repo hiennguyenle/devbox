@@ -126,8 +126,8 @@ session pre-selected. Killing a session also clears any terminal records
 pointing at it. Each terminal also remembers its last-used profile
 (`~/.config/devbox/lastprofile/`), which is what bare `devbox` reconnects to.
 
-After a tmux-backed command exits cleanly, devbox prints the command for
-continuing that session:
+When a tmux-backed command exits cleanly or its SSH connection first drops,
+devbox prints the command for continuing that session:
 
 ```text
 To continue this session, run devbox resume api

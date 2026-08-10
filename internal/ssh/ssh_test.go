@@ -30,6 +30,24 @@ func TestClassifyExit_TransportFailureReconnects(t *testing.T) {
 	}
 }
 
+func TestClassifyExitWithDisconnect_NotifiesOnceOnTransportFailure(t *testing.T) {
+	notified := false
+	calls := 0
+	onDisconnect := func() { calls++ }
+
+	action, err := classifyExitWithDisconnect(runExit(t, 255), onDisconnect, &notified)
+	if action != actionReconnect || err != nil {
+		t.Fatalf("first exit 255: got (%v, %v), want (actionReconnect, nil)", action, err)
+	}
+	action, err = classifyExitWithDisconnect(runExit(t, 255), onDisconnect, &notified)
+	if action != actionReconnect || err != nil {
+		t.Fatalf("second exit 255: got (%v, %v), want (actionReconnect, nil)", action, err)
+	}
+	if calls != 1 {
+		t.Errorf("disconnect notifications = %d, want 1", calls)
+	}
+}
+
 func TestClassifyExit_RemoteCommandFailureFails(t *testing.T) {
 	// 127 = remote "command not found" (e.g. tmux missing); must NOT reconnect
 	action, err := classifyExit(runExit(t, 127))

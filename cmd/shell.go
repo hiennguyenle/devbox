@@ -29,7 +29,7 @@ func runShell(cmd *cobra.Command, args []string) error {
 	}
 
 	client := newClient(prof)
-	err = client.Exec("")
+	err = client.Exec("", nil)
 	// In a raw shell the exit status belongs to the user (`exit 1` is not a
 	// devbox failure); only surface non-exit errors like a missing ssh binary.
 	var exitErr *exec.ExitError

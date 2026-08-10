@@ -98,14 +98,22 @@ func handleExecErr(err error, host string) error {
 }
 
 func execTmuxSession(client sshpkg.Executor, host, sessionName string) error {
-	if err := handleExecErr(client.Exec(tmux.NewAttachSession(sessionName)), host); err != nil {
-		return err
+	hintShown := false
+	showResumeHint := func() {
+		if hintShown {
+			return
+		}
+		hintShown = true
+		if validate.SessionName(sessionName) != nil {
+			fmt.Println("To continue this session, run devbox resume")
+			return
+		}
+		fmt.Printf("To continue this session, run devbox resume %s\n", sessionName)
 	}
 
-	if validate.SessionName(sessionName) != nil {
-		fmt.Println("To continue this session, run devbox resume")
-		return nil
+	if err := handleExecErr(client.Exec(tmux.NewAttachSession(sessionName), showResumeHint), host); err != nil {
+		return err
 	}
-	fmt.Printf("To continue this session, run devbox resume %s\n", sessionName)
+	showResumeHint()
 	return nil
 }

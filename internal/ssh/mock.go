@@ -3,11 +3,12 @@ package ssh
 import "strings"
 
 type MockExecutor struct {
-	RunCalls  []string
-	ExecCalls []string
-	RunOutput string
-	RunErr    error
-	ExecErr   error
+	RunCalls         []string
+	ExecCalls        []string
+	RunOutput        string
+	RunErr           error
+	ExecErr          error
+	DisconnectOnExec bool
 }
 
 func (m *MockExecutor) Run(remoteCmd string) (string, error) {
@@ -15,8 +16,11 @@ func (m *MockExecutor) Run(remoteCmd string) (string, error) {
 	return m.RunOutput, m.RunErr
 }
 
-func (m *MockExecutor) Exec(remoteCmd string) error {
+func (m *MockExecutor) Exec(remoteCmd string, onDisconnect func()) error {
 	m.ExecCalls = append(m.ExecCalls, remoteCmd)
+	if m.DisconnectOnExec && onDisconnect != nil {
+		onDisconnect()
+	}
 	return m.ExecErr
 }
 
