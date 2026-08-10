@@ -5,6 +5,18 @@ terminal sessions (Claude Code, Codex, builds) alive across network changes.
 
 ## Install
 
+### From MIJO Nexus (recommended)
+
+Install the latest prebuilt binary on macOS or Linux:
+
+```bash
+curl -fsSL https://nexus.mijo.services/repository/public/devbox/install.sh | bash
+```
+
+Re-run the same command to update. The installer detects the OS and CPU,
+verifies the release checksum, and installs to `~/.local/bin`. Set
+`INSTALL_DIR` or `DEVBOX_VERSION` to override the destination or version.
+
 ### From GitHub Releases
 
 Download the latest binary for your platform from [Releases](https://github.com/hiennguyenle/devbox/releases).
@@ -113,6 +125,13 @@ Running `devbox resume` without a name opens the session picker with that
 session pre-selected. Killing a session also clears any terminal records
 pointing at it. Each terminal also remembers its last-used profile
 (`~/.config/devbox/lastprofile/`), which is what bare `devbox` reconnects to.
+
+After a tmux-backed command exits cleanly, devbox prints the command for
+continuing that session:
+
+```text
+To continue this session, run devbox resume api
+```
 
 ## Requirements
 

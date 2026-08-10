@@ -9,6 +9,7 @@ import (
 	"github.com/hiennguyenle/devbox/internal/config"
 	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
 	"github.com/hiennguyenle/devbox/internal/tmux"
+	"github.com/hiennguyenle/devbox/internal/validate"
 	"github.com/spf13/cobra"
 )
 
@@ -53,8 +54,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 	client := newClient(prof)
 	recordProfileSession(name, prof.DefaultSession)
 
-	remoteCmd := tmux.NewAttachSession(prof.DefaultSession)
-	return handleExecErr(client.Exec(remoteCmd), prof.Host)
+	return execTmuxSession(client, prof.Host, prof.DefaultSession)
 }
 
 func requireConfig() (*config.Config, error) {
@@ -95,4 +95,17 @@ func handleExecErr(err error, host string) error {
 		return fmt.Errorf("tmux is not installed on %s", host)
 	}
 	return err
+}
+
+func execTmuxSession(client sshpkg.Executor, host, sessionName string) error {
+	if err := handleExecErr(client.Exec(tmux.NewAttachSession(sessionName)), host); err != nil {
+		return err
+	}
+
+	if validate.SessionName(sessionName) != nil {
+		fmt.Println("To continue this session, run devbox resume")
+		return nil
+	}
+	fmt.Printf("To continue this session, run devbox resume %s\n", sessionName)
+	return nil
 }

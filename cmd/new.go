@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hiennguyenle/devbox/internal/tmux"
 	"github.com/hiennguyenle/devbox/internal/validate"
 	"github.com/spf13/cobra"
 )
@@ -47,7 +46,7 @@ func runNew(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Creating session %q...\n", name)
 	recordProfileSession(profName, name)
 
-	return handleExecErr(client.Exec(tmux.NewAttachSession(name)), prof.Host)
+	return execTmuxSession(client, prof.Host, name)
 }
 
 func generateSessionID() string {

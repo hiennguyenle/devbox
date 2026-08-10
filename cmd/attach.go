@@ -141,7 +141,7 @@ func runAttachPicker(profName string, prof *config.Profile, client sshpkg.Execut
 	if len(sessions) == 0 {
 		fmt.Println("No sessions available. Creating default session...")
 		recordProfileSession(profName, prof.DefaultSession)
-		return handleExecErr(client.Exec(tmux.NewAttachSession(prof.DefaultSession)), prof.Host)
+		return execTmuxSession(client, prof.Host, prof.DefaultSession)
 	}
 
 	// Pre-select the cursor to the last used session if known
@@ -171,5 +171,5 @@ func runAttachPicker(profName string, prof *config.Profile, client sshpkg.Execut
 	}
 
 	recordProfileSession(profName, final.chosen)
-	return handleExecErr(client.Exec(tmux.NewAttachSession(final.chosen)), prof.Host)
+	return execTmuxSession(client, prof.Host, final.chosen)
 }

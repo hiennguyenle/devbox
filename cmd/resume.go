@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"github.com/hiennguyenle/devbox/internal/config"
-	"github.com/hiennguyenle/devbox/internal/tmux"
 	"github.com/hiennguyenle/devbox/internal/validate"
 	"github.com/spf13/cobra"
 )
@@ -37,7 +36,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		recordProfileSession(profName, name)
-		return handleExecErr(client.Exec(tmux.NewAttachSession(name)), prof.Host)
+		return execTmuxSession(client, prof.Host, name)
 	}
 
 	// No name — interactive picker, pre-select terminal's last session on this profile

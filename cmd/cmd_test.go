@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -50,6 +52,34 @@ func fakeTTY(t *testing.T, name string) {
 	orig := config.ResolveTTY
 	config.ResolveTTY = func() (string, error) { return name, nil }
 	t.Cleanup(func() { config.ResolveTTY = orig })
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	os.Stdout = w
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdout pipe: %v", err)
+	}
+	os.Stdout = original
+	t.Cleanup(func() {
+		os.Stdout = original
+		r.Close()
+	})
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	return string(out)
 }
 
 // --- parseSessions ---
@@ -114,6 +144,57 @@ func TestHandleExecErr_PassthroughOtherErrors(t *testing.T) {
 	orig := exitWith(t, 1)
 	if err := handleExecErr(orig, "myhost"); err == nil {
 		t.Error("exit 1 should surface an error")
+	}
+}
+
+func TestExecTmuxSession_PrintsResumeHintOnCleanExit(t *testing.T) {
+	mock := &sshpkg.MockExecutor{}
+	var runErr error
+
+	out := captureStdout(t, func() {
+		runErr = execTmuxSession(mock, "myhost", "api")
+	})
+
+	if runErr != nil {
+		t.Fatalf("execTmuxSession: %v", runErr)
+	}
+	if want := "To continue this session, run devbox resume api\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
+	}
+	if !mock.LastExecContains("api") {
+		t.Errorf("Exec calls = %v, want attach to api", mock.ExecCalls)
+	}
+}
+
+func TestExecTmuxSession_DoesNotPrintHintOnFailure(t *testing.T) {
+	mock := &sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}
+	var runErr error
+
+	out := captureStdout(t, func() {
+		runErr = execTmuxSession(mock, "myhost", "api")
+	})
+
+	if runErr == nil || !strings.Contains(runErr.Error(), "tmux is not installed") {
+		t.Fatalf("error = %v, want tmux-not-installed error", runErr)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want no resume hint", out)
+	}
+}
+
+func TestExecTmuxSession_InvalidDirectResumeNamePrintsPickerFallback(t *testing.T) {
+	mock := &sshpkg.MockExecutor{}
+	var runErr error
+
+	out := captureStdout(t, func() {
+		runErr = execTmuxSession(mock, "myhost", "out of band")
+	})
+
+	if runErr != nil {
+		t.Fatalf("execTmuxSession: %v", runErr)
+	}
+	if want := "To continue this session, run devbox resume\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
 	}
 }
 
