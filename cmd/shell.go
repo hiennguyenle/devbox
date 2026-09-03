@@ -18,17 +18,11 @@ func init() {
 }
 
 func runShell(cmd *cobra.Command, args []string) error {
-	cfg, err := requireConfig()
+	_, _, _, client, err := resolveExecutor("")
 	if err != nil {
 		return err
 	}
 
-	_, prof, err := resolveProfile(cfg, "")
-	if err != nil {
-		return err
-	}
-
-	client := newClient(prof)
 	err = client.Exec("", nil)
 	// In a raw shell the exit status belongs to the user (`exit 1` is not a
 	// devbox failure); only surface non-exit errors like a missing ssh binary.

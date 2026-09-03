@@ -18,16 +18,10 @@ func init() {
 }
 
 func runResume(cmd *cobra.Command, args []string) error {
-	cfg, err := requireConfig()
+	profName, host, defSession, client, err := resolveExecutor("")
 	if err != nil {
 		return err
 	}
-
-	profName, prof, err := resolveProfile(cfg, "")
-	if err != nil {
-		return err
-	}
-	client := newClient(prof)
 
 	// Named resume — direct attach
 	if len(args) == 1 {
@@ -36,7 +30,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		recordProfileSession(profName, name)
-		return execTmuxSession(client, prof.Host, name, false)
+		return execTmuxSession(client, host, name, profName == localProfileName)
 	}
 
 	// No name — interactive picker, pre-select terminal's last session on this profile
@@ -47,5 +41,5 @@ func runResume(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return runAttachPicker(profName, prof, client, preSelect)
+	return runAttachPicker(profName, host, defSession, client, preSelect)
 }

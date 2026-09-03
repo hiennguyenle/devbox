@@ -25,15 +25,10 @@ func init() {
 }
 
 func runKill(cmd *cobra.Command, args []string) error {
-	cfg, err := requireConfig()
+	profName, host, _, client, err := resolveExecutor("")
 	if err != nil {
 		return err
 	}
-	profName, prof, err := resolveProfile(cfg, "")
-	if err != nil {
-		return err
-	}
-	client := newClient(prof)
 
 	// Direct kill by name
 	if len(args) == 1 {
@@ -41,20 +36,20 @@ func runKill(cmd *cobra.Command, args []string) error {
 		if err := validate.SessionName(name); err != nil {
 			return err
 		}
-		return killSession(client, profName, prof.Host, name)
+		return killSession(client, profName, host, name)
 	}
 
 	// Interactive mode
-	sessions, err := listSessionsForPicker(client, prof.Host, false)
+	sessions, err := listSessionsForPicker(client, host, localFlag)
 	if err != nil {
 		return err
 	}
 	if len(sessions) == 0 {
-		fmt.Printf("No active sessions on %s.\n", prof.Host)
+		fmt.Printf("No active sessions on %s.\n", host)
 		return nil
 	}
 
-	model := killPickerModel{client: client, profile: profName, host: prof.Host, sessions: sessions}
+	model := killPickerModel{client: client, profile: profName, host: host, sessions: sessions}
 	p := tea.NewProgram(model)
 	result, err := p.Run()
 	if err != nil {
@@ -81,7 +76,7 @@ func killSession(client sshpkg.Executor, profile, host, name string) error {
 		if output != "" {
 			return fmt.Errorf("kill session %q: %s", name, output)
 		}
-		return handleSSHError(output, err, host, false)
+		return handleSSHError(output, err, host, profile == localProfileName)
 	}
 	config.DeleteSessionsByName(config.SessionsDir(), profile, name)
 	fmt.Printf("Killed %q\n", name)

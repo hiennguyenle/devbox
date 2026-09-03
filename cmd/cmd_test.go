@@ -668,3 +668,90 @@ func TestHandleSSHErrorLocal(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestRootLocalAttachesDefaultSession(t *testing.T) {
+	useTempConfigDir(t)
+	mock := &sshpkg.MockExecutor{}
+	withLocal(t, mock)
+
+	if err := runRoot(rootCmd, nil); err != nil {
+		t.Fatalf("runRoot: %v", err)
+	}
+	if !mock.LastExecContains("tmux new -A -s 'work'") {
+		t.Errorf("ExecCalls = %v", mock.ExecCalls)
+	}
+}
+
+func TestNewLocalResumeHint(t *testing.T) {
+	useTempConfigDir(t)
+	fakeTTY(t, "ttys001")
+	mock := &sshpkg.MockExecutor{}
+	withLocal(t, mock)
+
+	out := captureStdout(t, func() {
+		if err := runNew(newCmd, []string{"task1"}); err != nil {
+			t.Fatalf("runNew: %v", err)
+		}
+	})
+	if !mock.LastExecContains("tmux new -A -s 'task1'") {
+		t.Errorf("ExecCalls = %v", mock.ExecCalls)
+	}
+	if !strings.Contains(out, "devbox resume --local task1") {
+		t.Errorf("output = %q", out)
+	}
+}
+
+func TestResumeLocalNamed(t *testing.T) {
+	useTempConfigDir(t)
+	fakeTTY(t, "ttys001")
+	mock := &sshpkg.MockExecutor{}
+	withLocal(t, mock)
+
+	if err := runResume(resumeCmd, []string{"task1"}); err != nil {
+		t.Fatalf("runResume: %v", err)
+	}
+	if !mock.LastExecContains("tmux new -A -s 'task1'") {
+		t.Errorf("ExecCalls = %v", mock.ExecCalls)
+	}
+	if name, err := config.GetSession(config.SessionsDir(), "local", "ttys001"); err != nil || name != "task1" {
+		t.Errorf("session record = %q, %v", name, err)
+	}
+}
+
+func TestKillLocalClearsSessionRecords(t *testing.T) {
+	useTempConfigDir(t)
+	fakeTTY(t, "ttys001")
+	if err := config.SaveSession(config.SessionsDir(), "local", "ttys001", "task1"); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	mock := &sshpkg.MockExecutor{}
+	withLocal(t, mock)
+
+	out := captureStdout(t, func() {
+		if err := runKill(killCmd, []string{"task1"}); err != nil {
+			t.Fatalf("runKill: %v", err)
+		}
+	})
+	if !mock.LastRunContains("kill-session") {
+		t.Errorf("RunCalls = %v", mock.RunCalls)
+	}
+	if !strings.Contains(out, "Killed \"task1\"") {
+		t.Errorf("output = %q", out)
+	}
+	if _, err := config.GetSession(config.SessionsDir(), "local", "ttys001"); err == nil {
+		t.Error("local session record should be cleared after kill")
+	}
+}
+
+func TestShellLocal(t *testing.T) {
+	useTempConfigDir(t)
+	mock := &sshpkg.MockExecutor{}
+	withLocal(t, mock)
+
+	if err := runShell(shellCmd, nil); err != nil {
+		t.Fatalf("runShell: %v", err)
+	}
+	if len(mock.ExecCalls) != 1 || mock.ExecCalls[0] != "" {
+		t.Errorf("ExecCalls = %v", mock.ExecCalls)
+	}
+}

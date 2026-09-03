@@ -32,21 +32,15 @@ func runNew(cmd *cobra.Command, args []string) error {
 		name = generateSessionID()
 	}
 
-	cfg, err := requireConfig()
+	profName, host, _, client, err := resolveExecutor("")
 	if err != nil {
 		return err
 	}
 
-	profName, prof, err := resolveProfile(cfg, "")
-	if err != nil {
-		return err
-	}
-
-	client := newClient(prof)
 	fmt.Printf("Creating session %q...\n", name)
 	recordProfileSession(profName, name)
 
-	return execTmuxSession(client, prof.Host, name, false)
+	return execTmuxSession(client, host, name, profName == localProfileName)
 }
 
 func generateSessionID() string {

@@ -6,7 +6,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hiennguyenle/devbox/internal/config"
 	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
 	"github.com/hiennguyenle/devbox/internal/tmux"
 )
@@ -133,15 +132,16 @@ func listSessionsForPicker(client sshpkg.Executor, host string, local bool) ([]s
 // runAttachPicker shows an interactive session picker for a resolved profile.
 // preSelect is the session name to highlight initially (e.g. the terminal's
 // last session on this profile), or "" for default.
-func runAttachPicker(profName string, prof *config.Profile, client sshpkg.Executor, preSelect string) error {
-	sessions, err := listSessionsForPicker(client, prof.Host, false)
+func runAttachPicker(profName, host, defaultSession string, client sshpkg.Executor, preSelect string) error {
+	local := profName == localProfileName
+	sessions, err := listSessionsForPicker(client, host, local)
 	if err != nil {
 		return err
 	}
 	if len(sessions) == 0 {
 		fmt.Println("No sessions available. Creating default session...")
-		recordProfileSession(profName, prof.DefaultSession)
-		return execTmuxSession(client, prof.Host, prof.DefaultSession, false)
+		recordProfileSession(profName, defaultSession)
+		return execTmuxSession(client, host, defaultSession, local)
 	}
 
 	// Pre-select the cursor to the last used session if known
@@ -171,5 +171,5 @@ func runAttachPicker(profName string, prof *config.Profile, client sshpkg.Execut
 	}
 
 	recordProfileSession(profName, final.chosen)
-	return execTmuxSession(client, prof.Host, final.chosen, false)
+	return execTmuxSession(client, host, final.chosen, local)
 }
