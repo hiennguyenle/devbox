@@ -111,38 +111,38 @@ func TestParseSessions_EmptyAndBlankLines(t *testing.T) {
 
 func TestHandleSSHError_TmuxMissingFromOutput(t *testing.T) {
 	// "command not found" lives in the captured output, not err.Error()
-	err := handleSSHError("bash: line 1: tmux: command not found", exitWith(t, 127), "myhost")
+	err := handleSSHError("bash: line 1: tmux: command not found", exitWith(t, 127), "myhost", false)
 	if err == nil || !strings.Contains(err.Error(), "tmux is not installed") {
 		t.Errorf("got %v, want tmux-not-installed error", err)
 	}
 }
 
 func TestHandleSSHError_Unreachable(t *testing.T) {
-	err := handleSSHError("ssh: connect to host myhost port 22: Connection refused", exitWith(t, 255), "myhost")
+	err := handleSSHError("ssh: connect to host myhost port 22: Connection refused", exitWith(t, 255), "myhost", false)
 	if err == nil || !strings.Contains(err.Error(), "cannot reach myhost") {
 		t.Errorf("got %v, want cannot-reach error", err)
 	}
 }
 
 func TestHandleSSHError_NilError(t *testing.T) {
-	if err := handleSSHError("anything", nil, "myhost"); err != nil {
+	if err := handleSSHError("anything", nil, "myhost", false); err != nil {
 		t.Errorf("nil err should stay nil, got %v", err)
 	}
 }
 
 func TestHandleExecErr_MapsExit127ToTmuxMissing(t *testing.T) {
-	err := handleExecErr(exitWith(t, 127), "myhost")
+	err := handleExecErr(exitWith(t, 127), "myhost", false)
 	if err == nil || !strings.Contains(err.Error(), "tmux is not installed") {
 		t.Errorf("got %v, want tmux-not-installed error", err)
 	}
 }
 
 func TestHandleExecErr_PassthroughOtherErrors(t *testing.T) {
-	if err := handleExecErr(nil, "myhost"); err != nil {
+	if err := handleExecErr(nil, "myhost", false); err != nil {
 		t.Errorf("nil should stay nil, got %v", err)
 	}
 	orig := exitWith(t, 1)
-	if err := handleExecErr(orig, "myhost"); err == nil {
+	if err := handleExecErr(orig, "myhost", false); err == nil {
 		t.Error("exit 1 should surface an error")
 	}
 }
@@ -152,7 +152,7 @@ func TestExecTmuxSession_PrintsResumeHintOnCleanExit(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api")
+		runErr = execTmuxSession(mock, "myhost", "api", false)
 	})
 
 	if runErr != nil {
@@ -171,7 +171,7 @@ func TestExecTmuxSession_PrintsResumeHintOnceOnDisconnect(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api")
+		runErr = execTmuxSession(mock, "myhost", "api", false)
 	})
 
 	if runErr != nil {
@@ -187,7 +187,7 @@ func TestExecTmuxSession_DoesNotPrintHintOnFailure(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api")
+		runErr = execTmuxSession(mock, "myhost", "api", false)
 	})
 
 	if runErr == nil || !strings.Contains(runErr.Error(), "tmux is not installed") {
@@ -203,7 +203,7 @@ func TestExecTmuxSession_InvalidDirectResumeNamePrintsPickerFallback(t *testing.
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "out of band")
+		runErr = execTmuxSession(mock, "myhost", "out of band", false)
 	})
 
 	if runErr != nil {
@@ -459,7 +459,7 @@ func TestListSessionsForPicker_TransportErrorSurfaces(t *testing.T) {
 		RunErr:    exitWith(t, 255),
 		RunOutput: "ssh: connect to host myhost port 22: No route to host",
 	}
-	_, err := listSessionsForPicker(mock, "myhost")
+	_, err := listSessionsForPicker(mock, "myhost", false)
 	if err == nil || !strings.Contains(err.Error(), "cannot reach") {
 		t.Errorf("transport error must surface, got %v", err)
 	}
@@ -470,7 +470,7 @@ func TestListSessionsForPicker_NoServerMeansEmpty(t *testing.T) {
 		RunErr:    exitWith(t, 1),
 		RunOutput: "no server running on /private/tmp/tmux-501/default",
 	}
-	items, err := listSessionsForPicker(mock, "myhost")
+	items, err := listSessionsForPicker(mock, "myhost", false)
 	if err != nil {
 		t.Fatalf("no-server is not an error: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestListSessionsForPicker_FreshServerMeansEmpty(t *testing.T) {
 		RunErr:    exitWith(t, 1),
 		RunOutput: "error connecting to /tmp/tmux-501/default (No such file or directory)",
 	}
-	items, err := listSessionsForPicker(mock, "myhost")
+	items, err := listSessionsForPicker(mock, "myhost", false)
 	if err != nil {
 		t.Fatalf("fresh server is not an error: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestListSessionsForPicker_FreshServerMeansEmpty(t *testing.T) {
 
 func TestListSessionsForPicker_ParsesSessions(t *testing.T) {
 	mock := &sshpkg.MockExecutor{RunOutput: "work: 1 windows\napi: 2 windows"}
-	items, err := listSessionsForPicker(mock, "myhost")
+	items, err := listSessionsForPicker(mock, "myhost", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,5 +597,74 @@ func TestGenerateSessionID_Format(t *testing.T) {
 		if !pattern.MatchString(id) {
 			t.Errorf("id %q does not match %s", id, pattern)
 		}
+	}
+}
+
+// --- local mode ---
+
+// withLocal enables --local and swaps the local executor for mock. No config
+// file is needed, matching real --local behavior.
+func withLocal(t *testing.T, mock *sshpkg.MockExecutor) {
+	t.Helper()
+	orig := newLocalClient
+	newLocalClient = func() sshpkg.Executor { return mock }
+	t.Cleanup(func() { newLocalClient = orig })
+	localFlag = true
+	t.Cleanup(func() { localFlag = false })
+}
+
+func TestListLocalNoConfig(t *testing.T) {
+	useTempConfigDir(t) // empty dir: no config file exists
+	mock := &sshpkg.MockExecutor{RunOutput: "work: 1 windows"}
+	withLocal(t, mock)
+
+	out := captureStdout(t, func() {
+		if err := runList(listCmd, nil); err != nil {
+			t.Fatalf("runList: %v", err)
+		}
+	})
+	if !strings.Contains(out, "work: 1 windows") {
+		t.Errorf("output = %q", out)
+	}
+	if len(mock.RunCalls) != 1 || !strings.Contains(mock.RunCalls[0], "tmux list-sessions") {
+		t.Errorf("RunCalls = %v", mock.RunCalls)
+	}
+}
+
+func TestListLocalNoSessions(t *testing.T) {
+	useTempConfigDir(t)
+	mock := &sshpkg.MockExecutor{RunOutput: "no server running on /tmp/tmux-501/default", RunErr: exitWith(t, 1)}
+	withLocal(t, mock)
+
+	out := captureStdout(t, func() {
+		if err := runList(listCmd, nil); err != nil {
+			t.Fatalf("runList: %v", err)
+		}
+	})
+	if !strings.Contains(out, "No active sessions on localhost.") {
+		t.Errorf("output = %q", out)
+	}
+}
+
+func TestLocalConflictsWithProfileFlag(t *testing.T) {
+	useTempConfigDir(t)
+	withLocal(t, &sshpkg.MockExecutor{})
+	profileFlag = "builder-104"
+	t.Cleanup(func() { profileFlag = "" })
+
+	err := runList(listCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("want conflict error, got %v", err)
+	}
+}
+
+func TestHandleSSHErrorLocal(t *testing.T) {
+	err := handleSSHError("sh: tmux: command not found", exitWith(t, 127), "localhost", true)
+	if err == nil || !strings.Contains(err.Error(), "tmux is not installed locally") {
+		t.Errorf("got %v", err)
+	}
+	if err := handleSSHError("", exitWith(t, 1), "localhost", true); err == nil ||
+		!strings.Contains(err.Error(), "local command failed") {
+		t.Errorf("got %v", err)
 	}
 }

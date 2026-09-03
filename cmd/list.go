@@ -18,24 +18,18 @@ func init() {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
-	cfg, err := requireConfig()
+	_, host, _, client, err := resolveExecutor("")
 	if err != nil {
 		return err
 	}
 
-	_, prof, err := resolveProfile(cfg, "")
-	if err != nil {
-		return err
-	}
-
-	client := newClient(prof)
 	output, err := client.Run(tmux.ListSessions())
 	if err != nil {
 		if isNoServerOutput(output) {
-			fmt.Printf("No active sessions on %s.\n", prof.Host)
+			fmt.Printf("No active sessions on %s.\n", host)
 			return nil
 		}
-		return handleSSHError(output, err, prof.Host)
+		return handleSSHError(output, err, host, localFlag)
 	}
 
 	fmt.Println(output)

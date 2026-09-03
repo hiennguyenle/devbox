@@ -119,13 +119,13 @@ func isNoServerOutput(output string) bool {
 // listSessionsForPicker fetches remote sessions for the interactive pickers.
 // "no sessions yet" returns an empty slice; a transport failure returns an
 // error instead of masquerading as an empty list.
-func listSessionsForPicker(client sshpkg.Executor, host string) ([]sessionItem, error) {
+func listSessionsForPicker(client sshpkg.Executor, host string, local bool) ([]sessionItem, error) {
 	output, err := client.Run(tmux.ListSessions())
 	if err != nil {
 		if isNoServerOutput(output) {
 			return nil, nil
 		}
-		return nil, handleSSHError(output, err, host)
+		return nil, handleSSHError(output, err, host, local)
 	}
 	return parseSessions(output), nil
 }
@@ -134,14 +134,14 @@ func listSessionsForPicker(client sshpkg.Executor, host string) ([]sessionItem, 
 // preSelect is the session name to highlight initially (e.g. the terminal's
 // last session on this profile), or "" for default.
 func runAttachPicker(profName string, prof *config.Profile, client sshpkg.Executor, preSelect string) error {
-	sessions, err := listSessionsForPicker(client, prof.Host)
+	sessions, err := listSessionsForPicker(client, prof.Host, false)
 	if err != nil {
 		return err
 	}
 	if len(sessions) == 0 {
 		fmt.Println("No sessions available. Creating default session...")
 		recordProfileSession(profName, prof.DefaultSession)
-		return execTmuxSession(client, prof.Host, prof.DefaultSession)
+		return execTmuxSession(client, prof.Host, prof.DefaultSession, false)
 	}
 
 	// Pre-select the cursor to the last used session if known
@@ -171,5 +171,5 @@ func runAttachPicker(profName string, prof *config.Profile, client sshpkg.Execut
 	}
 
 	recordProfileSession(profName, final.chosen)
-	return execTmuxSession(client, prof.Host, final.chosen)
+	return execTmuxSession(client, prof.Host, final.chosen, false)
 }

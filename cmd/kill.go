@@ -45,7 +45,7 @@ func runKill(cmd *cobra.Command, args []string) error {
 	}
 
 	// Interactive mode
-	sessions, err := listSessionsForPicker(client, prof.Host)
+	sessions, err := listSessionsForPicker(client, prof.Host, false)
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func killSession(client sshpkg.Executor, profile, host, name string) error {
 		if output != "" {
 			return fmt.Errorf("kill session %q: %s", name, output)
 		}
-		return handleSSHError(output, err, host)
+		return handleSSHError(output, err, host, false)
 	}
 	config.DeleteSessionsByName(config.SessionsDir(), profile, name)
 	fmt.Printf("Killed %q\n", name)

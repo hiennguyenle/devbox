@@ -36,7 +36,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		recordProfileSession(profName, name)
-		return execTmuxSession(client, prof.Host, name)
+		return execTmuxSession(client, prof.Host, name, false)
 	}
 
 	// No name — interactive picker, pre-select terminal's last session on this profile
