@@ -73,6 +73,24 @@ profile. `devbox connect` is a kept alias for `devbox profile`.
 An existing single-host config (top-level `host:`) is migrated automatically:
 it becomes a profile named after the host's first label.
 
+## Local mode
+
+Every session command also works against tmux on this machine with `--local`,
+which needs no profile or config file:
+
+```bash
+devbox --local                  # attach to local session "work"
+devbox list --local             # list local sessions
+devbox new [NAME] --local       # create or attach
+devbox resume [NAME] --local    # attach (picker if no name)
+devbox kill [NAME] --local      # kill (picker if no name)
+devbox rename OLD NEW --local
+devbox shell --local            # open $SHELL, no tmux
+```
+
+`devbox local` is shorthand for `devbox --local`. The `--local` flag cannot
+be combined with `-p` / `--profile`, and `local` is reserved as a profile name.
+
 ## Usage
 
 ```bash
@@ -97,7 +115,7 @@ devbox help             # print usage
 Every command acts on the resolved profile — the last one used on this
 terminal, or the default. Use `-p` / `--profile <name>` to target a specific
 profile without connecting to it first (e.g. `devbox list -p aaa`). Add `-v` /
-`--verbose` to print the SSH command being executed.
+`--verbose` to print the SSH or local command being executed.
 
 ## Auto-Reconnect
 
@@ -119,7 +137,8 @@ whole time.
 
 ## Session Tracking
 
-Each terminal remembers, per profile, which tmux session it was last attached
+Each terminal remembers, per profile (including the built-in `local` profile),
+which tmux session it was last attached
 to (keyed by TTY, stored under `~/.config/devbox/sessions/<profile>/`).
 Running `devbox resume` without a name opens the session picker with that
 session pre-selected. Killing a session also clears any terminal records
@@ -135,7 +154,7 @@ To continue this session, run devbox resume api
 
 ## Requirements
 
-- Remote host must have `tmux` installed
+- The selected remote host or local machine must have `tmux` installed
 - Local machine must have `ssh` in PATH
 - Go 1.24+ to build from source (not needed for release binaries)
 - Key-based SSH auth (agent or key file). devbox reconnects unattended, so

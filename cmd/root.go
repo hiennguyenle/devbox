@@ -23,14 +23,14 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:     "devbox [PROFILE]",
-	Short:   "Manage remote tmux sessions over SSH",
+	Short:   "Manage tmux sessions over SSH or locally",
 	Version: version,
 	Args:    cobra.MaximumNArgs(1),
 	RunE:    runRoot,
 }
 
 func init() {
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "print SSH commands being executed")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "print the commands being executed (ssh or local)")
 	rootCmd.PersistentFlags().StringVarP(&profileFlag, "profile", "p", "", "profile to act on (overrides last-used/default)")
 	rootCmd.PersistentFlags().BoolVar(&localFlag, "local", false, "act on tmux sessions on this machine instead of a remote profile")
 }
