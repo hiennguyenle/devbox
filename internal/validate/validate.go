@@ -17,6 +17,7 @@ var reservedNames = map[string]bool{
 	"list": true, "new": true, "resume": true, "kill": true,
 	"rename": true, "shell": true, "version": true, "profile": true,
 	"connect": true, "help": true, "completion": true,
+	"local": true,
 }
 
 func ProfileName(name string) error {
