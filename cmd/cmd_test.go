@@ -682,6 +682,21 @@ func TestRootLocalAttachesDefaultSession(t *testing.T) {
 	}
 }
 
+func TestRootLocalPositionalShorthand(t *testing.T) {
+	useTempConfigDir(t)
+	mock := &sshpkg.MockExecutor{}
+	orig := newLocalClient
+	newLocalClient = func() sshpkg.Executor { return mock }
+	t.Cleanup(func() { newLocalClient = orig })
+
+	if err := runRoot(rootCmd, []string{"local"}); err != nil {
+		t.Fatalf("runRoot: %v", err)
+	}
+	if !mock.LastExecContains("tmux new -A -s 'work'") {
+		t.Errorf("ExecCalls = %v", mock.ExecCalls)
+	}
+}
+
 func TestNewLocalResumeHint(t *testing.T) {
 	useTempConfigDir(t)
 	fakeTTY(t, "ttys001")

@@ -155,7 +155,7 @@ To continue this session, run devbox resume api
 ## Requirements
 
 - The selected remote host or local machine must have `tmux` installed
-- Local machine must have `ssh` in PATH
+- Local machine must have `ssh` in PATH when using remote profiles
 - Go 1.24+ to build from source (not needed for release binaries)
 - Key-based SSH auth (agent or key file). devbox reconnects unattended, so
   password auth means a prompt on every reconnect.
