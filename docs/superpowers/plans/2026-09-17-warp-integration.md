@@ -17,7 +17,7 @@
 - Generated files are `devbox_<profile>.toml` and `devbox_local.toml`, mode 0644. Only files carrying the marker may be overwritten or removed.
 - Profile colors cycle `green, yellow, magenta, cyan, red` in sorted profile order. Local is always `blue`. No `title` field.
 - Attach chain inside Warp, exactly: `tmux new -A -s 'NAME' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION 'P' \; set-environment WARP_CLIENT_VERSION 'C' \; set-option -g allow-passthrough on`. Env steps are omitted when their value is empty. Outside Warp the command stays `tmux new -A -s 'NAME'`.
-- Env values must match `^[A-Za-z0-9._-]+$` or are treated as empty. Warp session id must match `^[a-f0-9]{32}$` or is treated as empty.
+- Env values must match `^[A-Za-z0-9][A-Za-z0-9._-]*$` or are treated as empty. Warp session id must match `^[a-f0-9]{32}$` or is treated as empty.
 - Live records: `<config.Dir()>/warp/live/<uuid>`, content `<profile>\n<session>\n`, mode 0600. Pruned by `devbox warp restore` when older than 7 days, only after this tab's attach has returned (never before the load, so sibling tabs restoring at the same moment keep their records).
 - devbox never edits rc files. `devbox warp restore` is silent (exit 0, no output) when there is nothing to do.
 - Documented minimum for notifications: tmux >= 3.3 on the remote, agent started in a window opened after attach, and a Warp plugin version that wraps for tmux (none released yet).
@@ -190,7 +190,7 @@ var SessionID = func() string {
 // envValuePattern keeps the values devbox forwards into a remote tmux
 // command to a single safe word (they are single-quoted anyway; this is
 // defence in depth).
-var envValuePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+var envValuePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // Env returns Warp's CLI-agent protocol version and client version, each ""
 // when unset or invalid. They are forwarded into the remote tmux session so
@@ -1136,12 +1136,45 @@ func TestExecTmuxSession_InsideWarpClearsLiveRecordOnError(t *testing.T) {
 	useTempConfigDir(t)
 	const id = "aca3a00ac45440f19afea15ac826acd0"
 	forceWarp(t, true, id)
-	mock := &sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}
+	probe := &execProbe{MockExecutor: sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}}
+	probe.during = func() {
+		p, s, err := warp.LoadLive(warp.LiveDir(), id)
+		if err != nil || p != "builder-104" || s != "api" {
+			t.Errorf("live record during Exec = %q, %q, %v; want builder-104, api", p, s, err)
+		}
+	}
 
-	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
 
 	if _, _, err := warp.LoadLive(warp.LiveDir(), id); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("live record after failed Exec: err = %v, want cleared", err)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpNestedInTmuxSkipsLiveRecord(t *testing.T) {
+	useTempConfigDir(t)
+	const id = "aca3a00ac45440f19afea15ac826acd0"
+	forceWarp(t, true, id)
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	// The outer tab's own record: different from what a nested attach would
+	// write, so an overwrite is detectable.
+	if err := warp.SaveLive(warp.LiveDir(), id, "outer", "main"); err != nil {
+		t.Fatal(err)
+	}
+	recordPath := filepath.Join(warp.LiveDir(), id)
+	want := []byte("outer\nmain\n")
+
+	probe := &execProbe{}
+	probe.during = func() {
+		if got, err := os.ReadFile(recordPath); err != nil || !bytes.Equal(got, want) {
+			t.Errorf("live record during Exec = %q, %v; want %q untouched", got, err, want)
+		}
+	}
+
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
+
+	if got, err := os.ReadFile(recordPath); err != nil || !bytes.Equal(got, want) {
+		t.Errorf("live record after Exec = %q, %v; want the outer tab's record %q kept", got, err, want)
 	}
 }
 
@@ -1214,7 +1247,11 @@ func execTmuxSession(client sshpkg.Executor, profName, host, sessionName string)
 	if warp.Detect() {
 		protocol, clientVersion := warp.Env()
 		attach = tmux.WarpAttachSession(sessionName, protocol, clientVersion)
-		if id := warp.SessionID(); id != "" {
+		// Inside an existing tmux pane this process is nested, not the tab's own
+		// attach; saving here would overwrite the outer tab's record and the
+		// deferred clear would delete it. tmux >= 3.3 already hides Warp from
+		// nested shells via TERM_PROGRAM; this covers older servers.
+		if id := warp.SessionID(); id != "" && os.Getenv("TMUX") == "" {
 			liveDir := warp.LiveDir()
 			if err := warp.SaveLive(liveDir, id, profName, sessionName); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not save warp live record: %v\n", err)
@@ -1536,7 +1573,7 @@ git commit -m "feat(cmd): devbox warp sync and hook; reserve warp as a profile n
 - Test: `cmd/cmd_test.go`
 
 **Interfaces:**
-- Consumes: `execTmuxSession(client, profName, host, sessionName)` (Task 6); `warp.Detect`, `warp.SessionID`, `warp.LiveDir`, `warp.LoadLive`, `warp.ClearLive`, `warp.PruneLive`, `warp.SaveLive` (Tasks 1, 3); `requireConfig`, `newClient`, `newLocalClient`, `localProfileName`, `recordProfileSession` from `cmd`.
+- Consumes: `execTmuxSession(client, profName, host, sessionName)` (Task 6); `warp.Detect`, `warp.SessionID`, `warp.LiveDir`, `warp.LoadLive`, `warp.ClearLive`, `warp.PruneLive`, `warp.SaveLive` (Tasks 1, 3); `config.Exists`, `config.LoadDefault`, `newClient`, `newLocalClient`, `localProfileName`, `recordProfileSession` from `cmd`.
 - Produces: `warpRestoreCmd`, `runWarpRestore`. Restore is a silent no-op outside Warp, without a session id, when `$TMUX` is set (a shell inside the attached tmux is not a restored tab), and when there is no record; the silent paths never prune. Pruning happens once, after the attach returns. Nine restore tests in total.
 
 - [ ] **Step 1: Write the failing tests** (append to `cmd/cmd_test.go`; add `"time"` to the imports)
@@ -1683,6 +1720,53 @@ func TestWarpRestore_DeletedProfileRemovesRecord(t *testing.T) {
 	}
 }
 
+func TestWarpRestore_MissingConfigRemovesRecordAndWarns(t *testing.T) {
+	useTempConfigDir(t) // no config file written
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(warp.LiveDir(), testWarpID)); !os.IsNotExist(err) {
+		t.Error("a record is meaningless without a config; it should be removed")
+	}
+}
+
+func TestWarpRestore_BrokenConfigKeepsRecord(t *testing.T) {
+	useTempConfigDir(t)
+	if err := os.WriteFile(config.Path(), []byte("profiles: [not a map\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	recordPath := filepath.Join(warp.LiveDir(), testWarpID)
+	want, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	got, err := os.ReadFile(recordPath)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Errorf("record after a broken config = %q, %v; want %q kept so the next shell restores", got, err, want)
+	}
+}
+
 func TestWarpRestore_MalformedRecordIsRemoved(t *testing.T) {
 	useTempConfigDir(t)
 	forceWarp(t, true, testWarpID)
@@ -1815,10 +1899,18 @@ func runWarpRestore(cmd *cobra.Command, args []string) error {
 	if profName == localProfileName {
 		host, client = "localhost", newLocalClient()
 	} else {
-		cfg, err := requireConfig()
-		if err != nil {
+		if !config.Exists() {
 			warp.ClearLive(dir, id)
-			fmt.Fprintf(os.Stderr, "warning: %v; removed warp live record\n", err)
+			fmt.Fprintf(os.Stderr, "warning: no devbox config; removed warp live record\n")
+			return nil
+		}
+		cfg, err := config.LoadDefault()
+		if err != nil {
+			// The config exists but cannot be loaded (typo, bad YAML, a reserved
+			// name). Keep the record: the user will fix the config, and the next
+			// shell in this tab restores. Only a missing config or a deleted profile
+			// makes the record meaningless.
+			fmt.Fprintf(os.Stderr, "warning: warp restore: %v\n", err)
 			return nil
 		}
 		prof, ok := cfg.Profile(profName)
@@ -1997,17 +2089,18 @@ Insert before `## Requirements`:
 ```markdown
 ## Warp
 
-Inside the [Warp](https://warp.dev) terminal, devbox does three extra things.
+Inside the [Warp](https://warp.dev) terminal, devbox does four extra things.
 Nothing changes in other terminals.
 
 **Tabs in the `+` menu.** `devbox warp sync` writes one tab config per
 profile, plus one for local mode, into `~/.warp/tab_configs/` (Linux:
-`~/.local/share/warp-terminal/tab_configs/`). Warp's `+` menu then lists
-"devbox: builder-104" and friends; picking one asks for a session name
-(default: the profile's default session) and opens a colored tab running
-`devbox resume`. Files devbox wrote start with a marker comment and are the
-only ones it ever overwrites or removes. `devbox profile` re-runs the sync
-after saving when it runs inside Warp.
+`${XDG_DATA_HOME:-~/.local/share}/warp-terminal/tab_configs/`). Warp's `+`
+menu then lists "devbox: builder-104" and friends; picking one asks for a
+session name (default: the profile's default session, or `work` for the
+local tab) and opens a colored tab running `devbox resume`. Files devbox
+wrote start with a marker comment and are the only ones it ever overwrites
+or removes. `devbox profile` re-runs the sync after saving when it runs
+inside Warp.
 
 **Live tab title.** While attached, the Warp tab reads
 `<session> · <pane title>`. Claude Code and Codex write their current task
@@ -2024,6 +2117,9 @@ When Warp restores its tabs after a reboot, a Warp quit, or a crash, each tab
 that was attached through devbox reattaches its own session. Tabs you had
 detached or closed do nothing. Set `DEVBOX_WARP_RESTORE=0` to turn it off.
 
+Put the `eval` line after whatever adds `devbox` to your `PATH`, and
+`export DEVBOX_WARP_RESTORE=0` above it if you want it off.
+
 **Notifications from remote Claude Code.** devbox forwards Warp's
 `WARP_CLI_AGENT_PROTOCOL_VERSION` and `WARP_CLIENT_VERSION` into the tmux
 session and turns on `allow-passthrough` on the running server (in memory
@@ -2035,6 +2131,12 @@ these must hold:
   attached (older shells never see the variables);
 - a version of the Warp plugin that wraps its notification for tmux. No
   released version does this yet; until then the plumbing is inert.
+
+If you already have a profile called `warp`, rename it in
+`~/.config/devbox/config.yaml` (and its directory under
+`~/.config/devbox/sessions/`) before upgrading: `warp` is now a reserved
+profile name, like `local`, and devbox refuses to load a config that uses a
+reserved name.
 ```
 
 - [ ] **Step 3: Check the README renders and the suite is green**

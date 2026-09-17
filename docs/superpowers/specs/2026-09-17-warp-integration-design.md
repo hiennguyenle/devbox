@@ -79,7 +79,7 @@ bytes it sends through the terminal.
   values copied from devbox's own environment. Only shells tmux spawns after
   the attach see them; agents started in a window or pane opened after devbox
   attached get notifications, agents already running do not. Documented as
-  such. Values must match `^[A-Za-z0-9._-]+$` or the step is skipped.
+  such. Values must match `^[A-Za-z0-9][A-Za-z0-9._-]*$` or the step is skipped.
 - **Passthrough.** `set-option -g allow-passthrough on`, in memory on the
   running server, never written to tmux.conf. On tmux < 3.3 this prints a
   status-line error and the attach still succeeds; documented minimum for
@@ -98,7 +98,9 @@ bytes it sends through the terminal.
   when the attach returns for any reason (session ended, detached, Ctrl+C in
   a reconnect wait, or an error). It survives only when the process dies
   without returning: reboot, Warp quit, Warp crash, tab killed. The UUID must
-  match `^[a-f0-9]{32}$` or nothing is recorded.
+  match `^[a-f0-9]{32}$` or nothing is recorded, and a devbox nested inside an
+  existing tmux pane (`$TMUX` set) records nothing either: it is not the tab's
+  own attach.
 - **Restore is immediate.** `devbox warp restore` finds the record for the
   current UUID, prints `Restoring <profile>:<session>`, and runs the normal
   attach. No countdown, no prompt. Detach or Ctrl+C leaves as usual.
@@ -226,11 +228,15 @@ tmux new -A -s 'api' \; set-option set-titles on \
     attach returns prunes records older than seven days. Pruning before the
     load would race: Warp restores every tab at once, and one tab could
     delete a sibling's week-old record before that sibling reads it. A record naming
-    a profile that no longer exists is removed with a warning, exit 0.
+    a profile that no longer exists is removed with a warning, exit 0. A
+    missing config file also removes it with a warning. A config that exists
+    but fails to load keeps the record and warns, so a typo does not lose the
+    tab.
   - `root.go`: `execTmuxSession` picks `tmux.WarpAttachSession` when
-    `warp.Detect()` is true, else `tmux.NewAttachSession`. When inside Warp
-    and `warp.SessionID()` is non-empty it calls `SaveLive` before `Exec` and
-    `ClearLive` (deferred) after it. This is the single change point for
+    `warp.Detect()` is true, else `tmux.NewAttachSession`. When inside Warp,
+    `warp.SessionID()` is non-empty and `$TMUX` is unset it calls `SaveLive`
+    before `Exec` and `ClearLive` (deferred) after it (a nested shell in a
+    tmux pane is not the tab's own attach). This is the single change point for
     root, `new`, `resume`, the picker, and `restore`. It needs the profile
     name, so its signature gains `profName`.
   - `profile.go`: after `config.Save` succeeds, `if warp.Detect()` run sync
@@ -299,6 +305,8 @@ Outcome matrix:
 - Auto-sync failure inside `devbox profile`: warning on stderr, exit 0.
 - `devbox warp restore` outside Warp, inside tmux (`$TMUX` set), without a UUID, or without a record:
   exit 0, no output. Unreadable record: removed, warning, exit 0.
+  Missing config: record removed, warning, exit 0. Config present but failing
+  to load: record kept, warning, exit 0.
 - `SaveLive` failure at attach: warning on stderr, attach proceeds.
 - `devbox warp hook fish`: `unsupported shell "fish" (zsh, bash)`, exit 1.
 
