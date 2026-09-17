@@ -35,7 +35,7 @@ func TestProfileName_Invalid(t *testing.T) {
 }
 
 func TestProfileName_ReservedRejected(t *testing.T) {
-	reserved := []string{"list", "new", "resume", "kill", "rename", "shell", "version", "profile", "connect", "help", "completion", "local"}
+	reserved := []string{"list", "new", "resume", "kill", "rename", "shell", "version", "profile", "connect", "help", "completion", "local", "warp"}
 	for _, name := range reserved {
 		if err := ProfileName(name); err == nil {
 			t.Errorf("ProfileName(%q) should be rejected as reserved, got nil", name)

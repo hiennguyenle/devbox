@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -886,5 +887,102 @@ func TestExecTmuxSession_LocalHintDerivedFromProfileName(t *testing.T) {
 
 	if want := "To continue this session, run devbox resume --local work\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
+	}
+}
+
+// --- devbox warp sync / hook ---
+
+func useTempTabConfigsDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	orig := warpTabConfigsDir
+	warpTabConfigsDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { warpTabConfigsDir = orig })
+	return dir
+}
+
+func TestWarpSync_WritesFilesAndPrintsHookHint(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	tabDir := useTempTabConfigsDir(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpSync(warpSyncCmd, nil) })
+	if runErr != nil {
+		t.Fatalf("runWarpSync: %v", runErr)
+	}
+
+	want := strings.Join([]string{
+		"wrote " + filepath.Join(tabDir, "devbox_builder-104.toml"),
+		"wrote " + filepath.Join(tabDir, "devbox_local.toml"),
+		"",
+		"To reattach devbox tabs after a reboot, add to ~/.zshrc:",
+		`  eval "$(devbox warp hook zsh)"`,
+	}, "\n") + "\n"
+	if out != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out, want)
+	}
+	if data, _ := os.ReadFile(filepath.Join(tabDir, "devbox_builder-104.toml")); !strings.HasPrefix(string(data), warp.Marker+"\n") {
+		t.Error("generated file must start with the marker")
+	}
+}
+
+func TestWarpSync_NoConfigWritesLocalOnly(t *testing.T) {
+	useTempConfigDir(t) // no config.yaml saved
+	tabDir := useTempTabConfigsDir(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpSync(warpSyncCmd, nil) })
+	if runErr != nil {
+		t.Fatalf("runWarpSync: %v", runErr)
+	}
+	if !strings.HasPrefix(out, "wrote "+filepath.Join(tabDir, "devbox_local.toml")+"\n\nTo reattach") {
+		t.Errorf("stdout = %q, want only the local file then the hint", out)
+	}
+}
+
+func TestWarpSync_SkippedLineNamesUnmanagedFile(t *testing.T) {
+	useTempConfigDir(t)
+	tabDir := useTempTabConfigsDir(t)
+	mine := filepath.Join(tabDir, "devbox_local.toml")
+	if err := os.WriteFile(mine, []byte("name = \"mine\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() { _ = runWarpSync(warpSyncCmd, nil) })
+
+	if !strings.HasPrefix(out, "skipped "+mine+" (not managed by devbox)\n") {
+		t.Errorf("stdout = %q, want skipped line first", out)
+	}
+}
+
+func TestWarpSync_MissingWarpDirErrors(t *testing.T) {
+	useTempConfigDir(t)
+	orig := warpTabConfigsDir
+	warpTabConfigsDir = func() (string, error) {
+		return "", fmt.Errorf("warp tab configs directory not found: /nowhere/tab_configs")
+	}
+	t.Cleanup(func() { warpTabConfigsDir = orig })
+
+	err := runWarpSync(warpSyncCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "/nowhere/tab_configs") {
+		t.Errorf("err = %v, want directory-not-found", err)
+	}
+}
+
+func TestWarpHook_PrintsSnippet(t *testing.T) {
+	want, _ := warp.Hook("zsh")
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpHook(warpHookCmd, []string{"zsh"}) })
+	if runErr != nil || out != want {
+		t.Errorf("runWarpHook: err = %v, out =\n%s\nwant\n%s", runErr, out, want)
+	}
+}
+
+func TestWarpHook_RejectsUnknownShell(t *testing.T) {
+	err := runWarpHook(warpHookCmd, []string{"fish"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported shell "fish"`) {
+		t.Errorf("err = %v", err)
 	}
 }
