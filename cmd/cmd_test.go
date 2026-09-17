@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hiennguyenle/devbox/internal/config"
@@ -984,5 +985,195 @@ func TestWarpHook_RejectsUnknownShell(t *testing.T) {
 	err := runWarpHook(warpHookCmd, []string{"fish"})
 	if err == nil || !strings.Contains(err.Error(), `unsupported shell "fish"`) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// --- devbox warp restore ---
+
+const testWarpID = "aca3a00ac45440f19afea15ac826acd0"
+
+func injectRemoteMock(t *testing.T) *sshpkg.MockExecutor {
+	t.Helper()
+	mock := &sshpkg.MockExecutor{}
+	orig := newClient
+	newClient = func(*config.Profile) sshpkg.Executor { return mock }
+	t.Cleanup(func() { newClient = orig })
+	return mock
+}
+
+func injectLocalMock(t *testing.T) *sshpkg.MockExecutor {
+	t.Helper()
+	mock := &sshpkg.MockExecutor{}
+	orig := newLocalClient
+	newLocalClient = func() sshpkg.Executor { return mock }
+	t.Cleanup(func() { newLocalClient = orig })
+	return mock
+}
+
+func TestWarpRestore_OutsideWarpIsSilent(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, false, "")
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want nothing", runErr, out, mock.ExecCalls)
+	}
+}
+
+func TestWarpRestore_NoRecordIsSilent(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want nothing", runErr, out, mock.ExecCalls)
+	}
+}
+
+func TestWarpRestore_InsideTmuxIsSilentAndKeepsRecord(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", "/tmp/tmux-501/default,123,0")
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want nothing inside tmux", runErr, out, mock.ExecCalls)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); err != nil {
+		t.Errorf("the outer tab's record must survive a nested shell, err = %v", err)
+	}
+}
+
+func TestWarpRestore_ReattachesRecordedSession(t *testing.T) {
+	useTempConfigDir(t)
+	fakeTTY(t, "ttytest")
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+	if runErr != nil {
+		t.Fatalf("runWarpRestore: %v", runErr)
+	}
+
+	if !strings.HasPrefix(out, "Restoring builder-104:api\n") {
+		t.Errorf("stdout = %q, want Restoring line first", out)
+	}
+	if len(mock.ExecCalls) != 1 || !strings.HasPrefix(mock.ExecCalls[0], "tmux new -A -s 'api' \\; ") {
+		t.Errorf("Exec calls = %v, want one Warp attach of api", mock.ExecCalls)
+	}
+	if got, _ := config.GetSession(config.SessionsDir(), "builder-104", "ttytest"); got != "api" {
+		t.Errorf("terminal affinity = %q, want api", got)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("live record after restore: err = %v, want cleared", err)
+	}
+}
+
+func TestWarpRestore_LocalRecordUsesLocalExecutor(t *testing.T) {
+	useTempConfigDir(t) // no config needed for local
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, localProfileName, "work"); err != nil {
+		t.Fatal(err)
+	}
+	remote := injectRemoteMock(t)
+	local := injectLocalMock(t)
+
+	out := captureStdout(t, func() { _ = runWarpRestore(warpRestoreCmd, nil) })
+
+	if !strings.HasPrefix(out, "Restoring local:work\n") {
+		t.Errorf("stdout = %q", out)
+	}
+	if len(local.ExecCalls) != 1 || len(remote.ExecCalls) != 0 {
+		t.Errorf("local execs = %v, remote execs = %v; want one local attach", local.ExecCalls, remote.ExecCalls)
+	}
+}
+
+func TestWarpRestore_DeletedProfileRemovesRecordAndWarns(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "gone", "api"); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("record for a deleted profile should be removed, err = %v", err)
+	}
+}
+
+func TestWarpRestore_MalformedRecordIsRemoved(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	if err := os.MkdirAll(warp.LiveDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(warp.LiveDir(), testWarpID), []byte("junk\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, execs = %v; want exit 0 and no attach", runErr, mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(warp.LiveDir(), testWarpID)); !os.IsNotExist(err) {
+		t.Error("malformed record should be removed")
+	}
+}
+
+func TestWarpRestore_PrunesOldRecordsButStillRestoresCurrent(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	dir := warp.LiveDir()
+	for _, id := range []string{testWarpID, "0000000000000000000000000000dead"} {
+		if err := warp.SaveLive(dir, id, "builder-104", "api"); err != nil {
+			t.Fatal(err)
+		}
+		past := time.Now().Add(-8 * 24 * time.Hour)
+		if err := os.Chtimes(filepath.Join(dir, id), past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mock := injectRemoteMock(t)
+
+	captureStdout(t, func() { _ = runWarpRestore(warpRestoreCmd, nil) })
+
+	if len(mock.ExecCalls) != 1 {
+		t.Errorf("a week-old record for this very tab must still restore; execs = %v", mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "0000000000000000000000000000dead")); !os.IsNotExist(err) {
+		t.Error("stale record for another tab should be pruned")
 	}
 }
