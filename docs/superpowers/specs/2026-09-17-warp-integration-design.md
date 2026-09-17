@@ -146,8 +146,9 @@ tmux new -A -s 'api' \; set-option set-titles on \
     `devbox_*.toml` and its first line is the marker; the profile name is the
     part between `devbox_` and `.toml`, and `devbox_local.toml` is always
     kept. `Change{Action, Path}` with actions
-    `wrote | removed | skipped`. `cfg` may be nil (no config yet): only the
-    local file is written.
+    `wrote | removed | skipped`. `cfg` may be nil (no config yet): the local
+    file is written and every managed profile file is removed, since no
+    profile exists.
   - `Env() (protocol, client string)` — reads and validates the two Warp
     variables; empty when unset or invalid.
 - `internal/tmux`
@@ -179,8 +180,9 @@ fi
 ```
 
 This covers both delivery paths: the `/dev/tty` write and the
-`terminalSequence` JSON field (Claude Code writes that string verbatim; the
-spike confirms this on the remote's Claude Code version). The devbox README
+`terminalSequence` JSON field. The spike only records the remote's Claude
+Code version; that Claude Code writes the wrapped string verbatim on the JSON
+path is verified during the PR work, not by the spike. The devbox README
 links the PR and names the first plugin version that carries it.
 
 ## Spike (before implementation)
@@ -208,7 +210,7 @@ Outcome matrix:
 | No toast | drop env injection and passthrough; notifications leave the design; PR still worth filing |
 | Tab decorated | none |
 | Toast but no decoration | note in README as a Warp limitation for non-detected sessions |
-| Remote Claude Code >= 2.1.141 | PR must be verified on the JSON path too |
+| Remote Claude Code >= 2.1.141 | the plugin there uses the JSON path; the PR must be verified on it |
 
 ## Error handling
 
