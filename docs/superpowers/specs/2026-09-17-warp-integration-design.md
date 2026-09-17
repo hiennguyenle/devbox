@@ -11,6 +11,9 @@ any Warp runtime API. Two layers:
 - **Through the pane.** The Warp tab title tracks the remote tmux session and
   the pane title (Claude Code and Codex write their task there), and Claude
   Code notifications emitted inside the remote tmux reach Warp.
+- **After a reboot.** A Warp tab that was attached through devbox when the
+  machine rebooted (or Warp quit or crashed) reattaches the same session
+  when Warp restores the tab.
 
 Warp has no plugin API. What Warp calls a plugin is a hook bundle for CLI
 agents (`warpdotdev/claude-code-warp`) that emits an OSC 777 notification
@@ -41,6 +44,12 @@ bytes it sends through the terminal.
   ignored when attaching an existing session; `set-environment` is not.
 - Warp Control (`warpctrl`) exists but is not installed here, cannot submit
   input, and is macOS-only. Not used.
+- Warp's session restoration brings back windows, tabs and panes with a
+  fresh shell; it never re-runs commands and offers no hook. A restored tab
+  keeps its `WARP_TERMINAL_SESSION_UUID`: observed on 2026-09-17 across a
+  full macOS reboot plus a Warp version change (same UUID before and after,
+  restored shell started three seconds after Warp launched). No environment
+  variable marks a shell as restored, and none is needed.
 
 ## Decisions (locked)
 
@@ -83,13 +92,52 @@ bytes it sends through the terminal.
   drops, which is the current behaviour. No regression. Notifications start
   working once `warpdotdev/claude-code-warp` wraps its sequence for tmux
   (see "Follow-up outside this repo").
+- **Live record per Warp tab.** While a tmux attach runs inside Warp,
+  `~/.config/devbox/warp/live/<WARP_TERMINAL_SESSION_UUID>` holds
+  `<profile>\n<session>\n` (0600). Written just before the attach, removed
+  when the attach returns for any reason (session ended, detached, Ctrl+C in
+  a reconnect wait, or an error). It survives only when the process dies
+  without returning: reboot, Warp quit, Warp crash, tab killed. The UUID must
+  match `^[a-f0-9]{32}$` or nothing is recorded.
+- **Restore is immediate.** `devbox warp restore` finds the record for the
+  current UUID, prints `Restoring <profile>:<session>`, and runs the normal
+  attach. No countdown, no prompt. Detach or Ctrl+C leaves as usual.
+- **Shell hook, user-installed.** devbox never edits rc files.
+  `devbox warp hook zsh|bash` prints the snippet; `devbox warp sync` ends by
+  printing the one line to add to the rc file. The snippet runs only in an
+  interactive shell with `TERM_PROGRAM=WarpTerminal`, a non-empty
+  `WARP_TERMINAL_SESSION_UUID`, and `DEVBOX_WARP_RESTORE` not set to `0`.
+- **Stale records** (a tab closed before the reboot never comes back) are
+  removed by `devbox warp restore` when older than seven days.
+- **Tracked commands:** root attach, `resume`, `new`, the picker, and local
+  mode, through the single attach function. `devbox shell` is not tracked.
 - **Reserved name.** `warp` joins `validate.reservedNames`.
 
 ## Command surface
 
 ```
-devbox warp sync     # (re)generate Warp tab configs from config.yaml
+devbox warp sync            # (re)generate Warp tab configs from config.yaml
+devbox warp hook zsh|bash   # print the shell snippet that reattaches restored tabs
+devbox warp restore         # reattach this Warp tab's session if it has a live record
 ```
+
+`devbox warp sync` ends with:
+
+```
+To reattach devbox tabs after a reboot, add to ~/.zshrc:
+  eval "$(devbox warp hook zsh)"
+```
+
+`devbox warp hook zsh` prints:
+
+```sh
+# devbox: reattach this Warp tab's session after a restart
+if [[ -o interactive && "$TERM_PROGRAM" == "WarpTerminal" && -n "$WARP_TERMINAL_SESSION_UUID" && "${DEVBOX_WARP_RESTORE:-1}" != "0" ]]; then
+  devbox warp restore
+fi
+```
+
+The bash variant tests `$- == *i*` instead of `-o interactive`.
 
 Output, one line per file:
 
@@ -153,23 +201,40 @@ tmux new -A -s 'api' \; set-option set-titles on \
     profile exists.
   - `Env() (protocol, client string)` — reads and validates the two Warp
     variables; empty when unset or invalid.
+  - `SessionID() string` — `WARP_TERMINAL_SESSION_UUID` when it matches
+    `^[a-f0-9]{32}$`, else empty. A var so tests can inject one.
+  - `LiveDir() string` — `<config.Dir()>/warp/live`.
+  - `SaveLive(dir, id, profile, session string) error`,
+    `LoadLive(dir, id string) (profile, session string, err error)`,
+    `ClearLive(dir, id string)`, `PruneLive(dir string, olderThan time.Duration)`.
+  - `Hook(shell string) (string, error)` — the snippet for `zsh` or `bash`;
+    error for anything else.
 - `internal/tmux`
   - `WarpAttachSession(name, protocol, client string) string` — the chain.
     Env steps are omitted when their value is empty. Values pass through
     `quote`.
 - `internal/validate` — add `"warp"` to `reservedNames`.
 - `cmd`
-  - `warp.go` (new): `warp` parent command with `sync` child; prints Changes.
+  - `warp.go` (new): `warp` parent command with `sync`, `hook`, and
+    `restore` children. `sync` prints Changes then the hook hint. `restore`
+    prunes stale records, loads the record for `warp.SessionID()`, exits 0
+    silently when there is none, otherwise resolves the profile (`local`
+    resolves to the local executor), prints `Restoring <profile>:<session>`,
+    calls `recordProfileSession`, and runs `execTmuxSession`. A record naming
+    a profile that no longer exists is removed with a warning, exit 0.
   - `root.go`: `execTmuxSession` picks `tmux.WarpAttachSession` when
-    `warp.Detect()` is true, else `tmux.NewAttachSession`. This is the single
-    change point for root, `new`, `resume`, and the picker.
+    `warp.Detect()` is true, else `tmux.NewAttachSession`. When inside Warp
+    and `warp.SessionID()` is non-empty it calls `SaveLive` before `Exec` and
+    `ClearLive` (deferred) after it. This is the single change point for
+    root, `new`, `resume`, the picker, and `restore`. It needs the profile
+    name, so its signature gains `profName`.
   - `profile.go`: after `config.Save` succeeds, `if warp.Detect()` run sync
     against `warp.TabConfigsDir()`; print changes; on error print
     `warning: warp sync: <err>` to stderr.
 - `README.md`: new "Warp" section (what sync writes, the `+` menu flow, the
   title, the notification prerequisites: tmux >= 3.3, agent started after
   attach, and a Warp plugin version that wraps its sequence for tmux, which
-  no released version does yet).
+  no released version does yet; the hook line and what restore does).
 
 ## Follow-up outside this repo (not in scope)
 
@@ -227,6 +292,10 @@ Outcome matrix:
 - Remote tmux errors from the chain (old tmux, unknown option) show on the
   tmux status line and never fail the attach.
 - Auto-sync failure inside `devbox profile`: warning on stderr, exit 0.
+- `devbox warp restore` outside Warp, without a UUID, or without a record:
+  exit 0, no output. Unreadable record: removed, warning, exit 0.
+- `SaveLive` failure at attach: warning on stderr, attach proceeds.
+- `devbox warp hook fish`: `unsupported shell "fish" (zsh, bash)`, exit 1.
 
 ## Testing
 
@@ -237,10 +306,17 @@ Outcome matrix:
 - `internal/tmux`: `WarpAttachSession` produces the exact chain; omits env
   steps when values are empty; quotes a session name containing `'`.
 - `internal/validate`: profile name `warp` rejected.
+- `internal/warp` live records: save/load round-trip, 0600 mode, clear is
+  idempotent, prune removes only files older than the cutoff, `SessionID`
+  rejects a malformed value, `Hook` output contains the four guards.
 - `cmd` (existing `MockExecutor`, temp config dir, `warp.Detect` forced):
   root/resume/new send the chain inside Warp and the bare command outside;
-  `warp sync` output lines; `profile` triggers sync only inside Warp and
-  survives a sync error.
+  `warp sync` output lines and the hook hint; `profile` triggers sync only
+  inside Warp and survives a sync error; `execTmuxSession` writes the live
+  record before `Exec` and clears it after, on both success and error;
+  `warp restore` with a record sends the attach chain and prints the
+  Restoring line, without a record sends nothing and prints nothing, with a
+  record for a deleted profile removes it and warns.
 
 ## Out of scope
 
