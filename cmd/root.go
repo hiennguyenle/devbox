@@ -169,7 +169,11 @@ func execTmuxSession(client sshpkg.Executor, profName, host, sessionName string)
 	if warp.Detect() {
 		protocol, clientVersion := warp.Env()
 		attach = tmux.WarpAttachSession(sessionName, protocol, clientVersion)
-		if id := warp.SessionID(); id != "" {
+		// Inside an existing tmux pane this process is nested, not the tab's own
+		// attach; saving here would overwrite the outer tab's record and the
+		// deferred clear would delete it. tmux >= 3.3 already hides Warp from
+		// nested shells via TERM_PROGRAM; this covers older servers.
+		if id := warp.SessionID(); id != "" && os.Getenv("TMUX") == "" {
 			liveDir := warp.LiveDir()
 			if err := warp.SaveLive(liveDir, id, profName, sessionName); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not save warp live record: %v\n", err)

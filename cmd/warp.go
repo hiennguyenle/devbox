@@ -130,10 +130,18 @@ func runWarpRestore(cmd *cobra.Command, args []string) error {
 	if profName == localProfileName {
 		host, client = "localhost", newLocalClient()
 	} else {
-		cfg, err := requireConfig()
-		if err != nil {
+		if !config.Exists() {
 			warp.ClearLive(dir, id)
-			fmt.Fprintf(os.Stderr, "warning: %v; removed warp live record\n", err)
+			fmt.Fprintf(os.Stderr, "warning: no devbox config; removed warp live record\n")
+			return nil
+		}
+		cfg, err := config.LoadDefault()
+		if err != nil {
+			// The config exists but cannot be loaded (typo, bad YAML, a reserved
+			// name). Keep the record: the user will fix the config, and the next
+			// shell in this tab restores. Only a missing config or a deleted profile
+			// makes the record meaningless.
+			fmt.Fprintf(os.Stderr, "warning: warp restore: %v\n", err)
 			return nil
 		}
 		prof, ok := cfg.Profile(profName)

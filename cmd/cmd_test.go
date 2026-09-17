@@ -856,12 +856,45 @@ func TestExecTmuxSession_InsideWarpClearsLiveRecordOnError(t *testing.T) {
 	useTempConfigDir(t)
 	const id = "aca3a00ac45440f19afea15ac826acd0"
 	forceWarp(t, true, id)
-	mock := &sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}
+	probe := &execProbe{MockExecutor: sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}}
+	probe.during = func() {
+		p, s, err := warp.LoadLive(warp.LiveDir(), id)
+		if err != nil || p != "builder-104" || s != "api" {
+			t.Errorf("live record during Exec = %q, %q, %v; want builder-104, api", p, s, err)
+		}
+	}
 
-	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
 
 	if _, _, err := warp.LoadLive(warp.LiveDir(), id); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("live record after failed Exec: err = %v, want cleared", err)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpNestedInTmuxSkipsLiveRecord(t *testing.T) {
+	useTempConfigDir(t)
+	const id = "aca3a00ac45440f19afea15ac826acd0"
+	forceWarp(t, true, id)
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	// The outer tab's own record: different from what a nested attach would
+	// write, so an overwrite is detectable.
+	if err := warp.SaveLive(warp.LiveDir(), id, "outer", "main"); err != nil {
+		t.Fatal(err)
+	}
+	recordPath := filepath.Join(warp.LiveDir(), id)
+	want := []byte("outer\nmain\n")
+
+	probe := &execProbe{}
+	probe.during = func() {
+		if got, err := os.ReadFile(recordPath); err != nil || !bytes.Equal(got, want) {
+			t.Errorf("live record during Exec = %q, %v; want %q untouched", got, err, want)
+		}
+	}
+
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
+
+	if got, err := os.ReadFile(recordPath); err != nil || !bytes.Equal(got, want) {
+		t.Errorf("live record after Exec = %q, %v; want the outer tab's record %q kept", got, err, want)
 	}
 }
 
@@ -1126,6 +1159,53 @@ func TestWarpRestore_DeletedProfileRemovesRecord(t *testing.T) {
 	}
 	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("record for a deleted profile should be removed, err = %v", err)
+	}
+}
+
+func TestWarpRestore_MissingConfigRemovesRecordAndWarns(t *testing.T) {
+	useTempConfigDir(t) // no config file written
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(warp.LiveDir(), testWarpID)); !os.IsNotExist(err) {
+		t.Error("a record is meaningless without a config; it should be removed")
+	}
+}
+
+func TestWarpRestore_BrokenConfigKeepsRecord(t *testing.T) {
+	useTempConfigDir(t)
+	if err := os.WriteFile(config.Path(), []byte("profiles: [not a map\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	recordPath := filepath.Join(warp.LiveDir(), testWarpID)
+	want, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	got, err := os.ReadFile(recordPath)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Errorf("record after a broken config = %q, %v; want %q kept so the next shell restores", got, err, want)
 	}
 }
 
