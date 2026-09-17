@@ -45,6 +45,19 @@ func TestEnv_ReadsAndValidates(t *testing.T) {
 	}
 }
 
+func TestEnv_RequiresAlphanumericFirstCharacter(t *testing.T) {
+	// A leading "-" would turn the value into a flag for the remote command.
+	t.Setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "-1")
+	t.Setenv("WARP_CLIENT_VERSION", "v2024.01-beta_1")
+	if p, c := Env(); p != "" || c != "v2024.01-beta_1" {
+		t.Errorf("Env() = %q, %q; want empty protocol and v2024.01-beta_1", p, c)
+	}
+	t.Setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1.2.3")
+	if p, _ := Env(); p != "1.2.3" {
+		t.Errorf("Env() protocol = %q, want 1.2.3", p)
+	}
+}
+
 func TestEnv_RejectsShellMetacharacters(t *testing.T) {
 	t.Setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1; rm -rf /")
 	t.Setenv("WARP_CLIENT_VERSION", "")

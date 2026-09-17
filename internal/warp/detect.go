@@ -4,7 +4,9 @@
 package warp
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,7 +36,7 @@ var SessionID = func() string {
 // envValuePattern keeps the values devbox forwards into a remote tmux
 // command to a single safe word (they are single-quoted anyway; this is
 // defence in depth).
-var envValuePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+var envValuePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // Env returns Warp's CLI-agent protocol version and client version, each ""
 // when unset or invalid. They are forwarded into the remote tmux session so
@@ -69,7 +71,14 @@ func TabConfigsDir() (string, error) {
 		}
 		dir = filepath.Join(base, "warp-terminal", "tab_configs")
 	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("warp tab configs directory %s: %w", dir, err)
+		}
+		return "", fmt.Errorf("warp tab configs directory not found: %s", dir)
+	}
+	if !info.IsDir() {
 		return "", fmt.Errorf("warp tab configs directory not found: %s", dir)
 	}
 	return dir, nil

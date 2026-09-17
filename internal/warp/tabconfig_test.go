@@ -157,6 +157,40 @@ func TestSync_LeavesUnmanagedStaleFilesAlone(t *testing.T) {
 	}
 }
 
+func TestSync_RewritesChangedManagedFile(t *testing.T) {
+	dir := t.TempDir()
+	prof := &config.Profile{Host: "ha", DefaultSession: "work"}
+	cfg := &config.Config{DefaultProfile: "a", Profiles: map[string]*config.Profile{"a": prof}}
+	if _, err := Sync(dir, cfg); err != nil {
+		t.Fatalf("first Sync: %v", err)
+	}
+
+	prof.Host = "hb"
+	prof.DefaultSession = "api"
+	changes, err := Sync(dir, cfg)
+	if err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+
+	path := filepath.Join(dir, "devbox_a.toml")
+	found := false
+	for _, c := range changes {
+		if c.Path == path {
+			found = true
+			if c.Action != ActionWrote {
+				t.Errorf("changes for %s = %q, want %q", path, c.Action, ActionWrote)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("changes = %+v, want one for %s", changes, path)
+	}
+	want := RenderProfile("a", prof, "green")
+	if data, _ := os.ReadFile(path); string(data) != want {
+		t.Errorf("devbox_a.toml after the change:\n%s\nwant\n%s", data, want)
+	}
+}
+
 func TestSync_MissingDirErrors(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope")
 	_, err := Sync(missing, nil)

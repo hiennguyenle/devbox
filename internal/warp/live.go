@@ -26,9 +26,10 @@ func SaveLive(dir, id, profile, session string) error {
 	return os.WriteFile(filepath.Join(dir, id), []byte(profile+"\n"+session+"\n"), 0600)
 }
 
-// LoadLive reads the record for id. A missing record returns an error that
-// satisfies errors.Is(err, fs.ErrNotExist); a malformed one does not, so
-// callers can tell "nothing to restore" from "remove this junk".
+// LoadLive reads the record for id. A missing record returns an error
+// satisfying errors.Is(err, fs.ErrNotExist) — nothing to restore. Any other
+// read failure, and a malformed body, return a non-ErrNotExist error, which
+// `devbox warp restore` treats as unreadable and removes.
 func LoadLive(dir, id string) (profile, session string, err error) {
 	data, err := os.ReadFile(filepath.Join(dir, id))
 	if err != nil {

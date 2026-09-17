@@ -2,7 +2,9 @@ package warp
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,7 +89,14 @@ default = "work"
 // wanted and every managed profile file is stale. Returns the changes in
 // order: writes (profiles sorted, then local), then removals.
 func Sync(dir string, cfg *config.Config) ([]Change, error) {
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("warp tab configs directory %s: %w", dir, err)
+		}
+		return nil, fmt.Errorf("warp tab configs directory not found: %s", dir)
+	}
+	if !info.IsDir() {
 		return nil, fmt.Errorf("warp tab configs directory not found: %s", dir)
 	}
 
