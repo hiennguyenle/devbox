@@ -1002,15 +1002,15 @@ Expected: build failure, `undefined: WarpAttachSession`.
 func WarpAttachSession(name, protocol, client string) string {
 	var b strings.Builder
 	b.WriteString(NewAttachSession(name))
-	b.WriteString(" \; set-option set-titles on")
-	b.WriteString(" \; set-option set-titles-string '#S · #T'")
+	b.WriteString(` \; set-option set-titles on`)
+	b.WriteString(` \; set-option set-titles-string '#S · #T'`)
 	if protocol != "" {
-		b.WriteString(" \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION " + quote(protocol))
+		b.WriteString(` \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION ` + quote(protocol))
 	}
 	if client != "" {
-		b.WriteString(" \; set-environment WARP_CLIENT_VERSION " + quote(client))
+		b.WriteString(` \; set-environment WARP_CLIENT_VERSION ` + quote(client))
 	}
-	b.WriteString(" \; set-option -g allow-passthrough on")
+	b.WriteString(` \; set-option -g allow-passthrough on`)
 	return b.String()
 }
 ```
@@ -1053,6 +1053,7 @@ The developer's own terminal is Warp, so without this the real environment would
 func TestMain(m *testing.M) {
 	warp.Detect = func() bool { return false }
 	warp.SessionID = func() string { return "" }
+	os.Unsetenv("TMUX") // same results whether or not `go test` itself runs inside tmux
 	os.Exit(m.Run())
 }
 
@@ -1536,7 +1537,7 @@ git commit -m "feat(cmd): devbox warp sync and hook; reserve warp as a profile n
 
 **Interfaces:**
 - Consumes: `execTmuxSession(client, profName, host, sessionName)` (Task 6); `warp.Detect`, `warp.SessionID`, `warp.LiveDir`, `warp.LoadLive`, `warp.ClearLive`, `warp.PruneLive`, `warp.SaveLive` (Tasks 1, 3); `requireConfig`, `newClient`, `newLocalClient`, `localProfileName`, `recordProfileSession` from `cmd`.
-- Produces: `warpRestoreCmd`, `runWarpRestore`.
+- Produces: `warpRestoreCmd`, `runWarpRestore`. Restore is a silent no-op outside Warp, without a session id, and when `$TMUX` is set (a shell inside the attached tmux is not a restored tab).
 
 - [ ] **Step 1: Write the failing tests** (append to `cmd/cmd_test.go`; add `"time"` to the imports)
 
@@ -1588,6 +1589,26 @@ func TestWarpRestore_NoRecordIsSilent(t *testing.T) {
 
 	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
 		t.Errorf("err = %v, out = %q, execs = %v; want nothing", runErr, out, mock.ExecCalls)
+	}
+}
+
+func TestWarpRestore_InsideTmuxIsSilentAndKeepsRecord(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", "/tmp/tmux-501/default,123,0")
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want nothing inside tmux", runErr, out, mock.ExecCalls)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); err != nil {
+		t.Errorf("the outer tab's record must survive a nested shell, err = %v", err)
 	}
 }
 
@@ -1739,7 +1760,11 @@ const liveRecordMaxAge = 7 * 24 * time.Hour
 // start inside Warp. It is silent unless this exact Warp tab was attached
 // through devbox when the process died, in which case it reattaches.
 func runWarpRestore(cmd *cobra.Command, args []string) error {
-	if !warp.Detect() {
+	// A shell inside the tmux session devbox just attached is not a restored
+	// tab. tmux >= 3.3 rewrites TERM_PROGRAM so the hook never fires there;
+	// the TMUX check covers older servers, where a nested restore would fail
+	// the attach and then clear the outer tab's record.
+	if !warp.Detect() || os.Getenv("TMUX") != "" {
 		return nil
 	}
 	id := warp.SessionID()

@@ -217,8 +217,9 @@ tmux new -A -s 'api' \; set-option set-titles on \
 - `cmd`
   - `warp.go` (new): `warp` parent command with `sync`, `hook`, and
     `restore` children. `sync` prints Changes then the hook hint. `restore`
-    prunes stale records, loads the record for `warp.SessionID()`, exits 0
-    silently when there is none, otherwise resolves the profile (`local`
+    exits 0 silently when `$TMUX` is set (a shell inside the attached tmux
+    is not a restored tab), prunes stale records, loads the record for
+    `warp.SessionID()`, exits 0 silently when there is none, otherwise resolves the profile (`local`
     resolves to the local executor), prints `Restoring <profile>:<session>`,
     calls `recordProfileSession`, and runs `execTmuxSession`. A record naming
     a profile that no longer exists is removed with a warning, exit 0.
@@ -292,7 +293,7 @@ Outcome matrix:
 - Remote tmux errors from the chain (old tmux, unknown option) show on the
   tmux status line and never fail the attach.
 - Auto-sync failure inside `devbox profile`: warning on stderr, exit 0.
-- `devbox warp restore` outside Warp, without a UUID, or without a record:
+- `devbox warp restore` outside Warp, inside tmux (`$TMUX` set), without a UUID, or without a record:
   exit 0, no output. Unreadable record: removed, warning, exit 0.
 - `SaveLive` failure at attach: warning on stderr, attach proceeds.
 - `devbox warp hook fish`: `unsupported shell "fish" (zsh, bash)`, exit 1.
