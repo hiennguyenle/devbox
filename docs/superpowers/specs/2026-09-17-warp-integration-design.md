@@ -78,9 +78,11 @@ bytes it sends through the terminal.
 - **Reconnect.** Every reattach re-sends the whole chain; all steps are
   idempotent.
 - **Local mode** sends the same chain to local tmux.
-- **Ships regardless of the upstream PR.** Today the injected variables make
-  the plugin emit a sequence tmux drops, which is the current behaviour. No
-  regression; it starts working when the plugin update lands.
+- **Notification plumbing ships now; the plugin fix is not this repo's
+  work.** Today the injected variables make the plugin emit a sequence tmux
+  drops, which is the current behaviour. No regression. Notifications start
+  working once `warpdotdev/claude-code-warp` wraps its sequence for tmux
+  (see "Follow-up outside this repo").
 - **Reserved name.** `warp` joins `validate.reservedNames`.
 
 ## Command surface
@@ -166,11 +168,14 @@ tmux new -A -s 'api' \; set-option set-titles on \
     `warning: warp sync: <err>` to stderr.
 - `README.md`: new "Warp" section (what sync writes, the `+` menu flow, the
   title, the notification prerequisites: tmux >= 3.3, agent started after
-  attach, plugin version with the tmux fix).
+  attach, and a Warp plugin version that wraps its sequence for tmux, which
+  no released version does yet).
 
-## Upstream PR (warpdotdev/claude-code-warp)
+## Follow-up outside this repo (not in scope)
 
-In `scripts/emit-terminal-sequence.sh`, before delivery, when `$TMUX` is set
+The missing piece lives in `warpdotdev/claude-code-warp`, not in devbox.
+Recorded here so whoever files it has the exact change. In
+`scripts/emit-terminal-sequence.sh`, before delivery, when `$TMUX` is set
 wrap the sequence:
 
 ```sh
@@ -181,8 +186,8 @@ fi
 
 This covers both delivery paths: the `/dev/tty` write and the
 `terminalSequence` JSON field. The spike only records the remote's Claude
-Code version; that Claude Code writes the wrapped string verbatim on the JSON
-path is verified during the PR work, not by the spike. The devbox README
+Code version; whether Claude Code writes the wrapped string verbatim on the
+JSON path is for the plugin change to verify, not devbox. The devbox README
 links the PR and names the first plugin version that carries it.
 
 ## Spike (before implementation)
@@ -207,7 +212,7 @@ Outcome matrix:
 | Title changes | none |
 | Title does not change | add `title = "{{session}} @ <profile>"` to generated configs; drop the remote title step |
 | Plain toast appears | none |
-| No toast | drop env injection and passthrough; notifications leave the design; PR still worth filing |
+| No toast | drop env injection and passthrough; notifications leave the design |
 | Tab decorated | none |
 | Toast but no decoration | note in README as a Warp limitation for non-detected sessions |
 | Remote Claude Code >= 2.1.141 | the plugin there uses the JSON path; the PR must be verified on it |
@@ -239,6 +244,7 @@ Outcome matrix:
 
 ## Out of scope
 
-Warp Control (`warpctrl`), an MCP server or Warp skill, Codex's notify
-setting, `warp://` links in `devbox list` output, Warp Preview channel
-paths, Warpifying `devbox shell`, Windows.
+The tmux-wrapping change to Warp's Claude Code plugin (see above), Warp
+Control (`warpctrl`), an MCP server or Warp skill, Codex's notify setting,
+`warp://` links in `devbox list` output, Warp Preview channel paths,
+Warpifying `devbox shell`, Windows.
