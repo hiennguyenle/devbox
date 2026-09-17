@@ -157,17 +157,18 @@ To continue this session, run devbox resume api
 
 ## Warp
 
-Inside the [Warp](https://warp.dev) terminal, devbox does three extra things.
+Inside the [Warp](https://warp.dev) terminal, devbox does four extra things.
 Nothing changes in other terminals.
 
 **Tabs in the `+` menu.** `devbox warp sync` writes one tab config per
 profile, plus one for local mode, into `~/.warp/tab_configs/` (Linux:
-`~/.local/share/warp-terminal/tab_configs/`). Warp's `+` menu then lists
-"devbox: builder-104" and friends; picking one asks for a session name
-(default: the profile's default session) and opens a colored tab running
-`devbox resume`. Files devbox wrote start with a marker comment and are the
-only ones it ever overwrites or removes. `devbox profile` re-runs the sync
-after saving when it runs inside Warp.
+`${XDG_DATA_HOME:-~/.local/share}/warp-terminal/tab_configs/`). Warp's `+`
+menu then lists "devbox: builder-104" and friends; picking one asks for a
+session name (default: the profile's default session, or `work` for the
+local tab) and opens a colored tab running `devbox resume`. Files devbox
+wrote start with a marker comment and are the only ones it ever overwrites
+or removes. `devbox profile` re-runs the sync after saving when it runs
+inside Warp.
 
 **Live tab title.** While attached, the Warp tab reads
 `<session> · <pane title>`. Claude Code and Codex write their current task
@@ -184,6 +185,9 @@ When Warp restores its tabs after a reboot, a Warp quit, or a crash, each tab
 that was attached through devbox reattaches its own session. Tabs you had
 detached or closed do nothing. Set `DEVBOX_WARP_RESTORE=0` to turn it off.
 
+Put the `eval` line after whatever adds `devbox` to your `PATH`, and
+`export DEVBOX_WARP_RESTORE=0` above it if you want it off.
+
 **Notifications from remote Claude Code.** devbox forwards Warp's
 `WARP_CLI_AGENT_PROTOCOL_VERSION` and `WARP_CLIENT_VERSION` into the tmux
 session and turns on `allow-passthrough` on the running server (in memory
@@ -195,6 +199,12 @@ these must hold:
   attached (older shells never see the variables);
 - a version of the Warp plugin that wraps its notification for tmux. No
   released version does this yet; until then the plumbing is inert.
+
+If you already have a profile called `warp`, rename it in
+`~/.config/devbox/config.yaml` (and its directory under
+`~/.config/devbox/sessions/`) before upgrading: `warp` is now a reserved
+profile name, like `local`, and devbox refuses to load a config that uses a
+reserved name.
 
 ## Requirements
 
