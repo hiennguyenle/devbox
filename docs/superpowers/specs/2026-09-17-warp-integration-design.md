@@ -142,7 +142,10 @@ tmux new -A -s 'api' \; set-option set-titles on \
     `RenderLocal() string` — TOML text as above.
   - `Sync(dir string, cfg *config.Config) ([]Change, error)` — writes managed
     files (0644), removes managed files for profiles that no longer exist,
-    skips unmanaged collisions. `Change{Action, Path}` with actions
+    skips unmanaged collisions. A file is "managed" when its name matches
+    `devbox_*.toml` and its first line is the marker; the profile name is the
+    part between `devbox_` and `.toml`, and `devbox_local.toml` is always
+    kept. `Change{Action, Path}` with actions
     `wrote | removed | skipped`. `cfg` may be nil (no config yet): only the
     local file is written.
   - `Env() (protocol, client string)` — reads and validates the two Warp
