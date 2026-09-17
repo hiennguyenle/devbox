@@ -72,6 +72,22 @@ func TestWarpAttachSession_OmitsEmptyEnvSteps(t *testing.T) {
 	}
 }
 
+func TestWarpAttachSession_OmitsClientStepWhenOnlyProtocolIsSet(t *testing.T) {
+	got := WarpAttachSession("api", "1", "")
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-option -g allow-passthrough on`
+	if got != want {
+		t.Errorf("WarpAttachSession =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestWarpAttachSession_OmitsProtocolStepWhenOnlyClientIsSet(t *testing.T) {
+	got := WarpAttachSession("api", "", "v1")
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
+	if got != want {
+		t.Errorf("WarpAttachSession =\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestWarpAttachSession_QuotesSessionName(t *testing.T) {
 	got := WarpAttachSession("it's", "", "")
 	if want := `tmux new -A -s 'it'\''s' \; `; !strings.HasPrefix(got, want) {

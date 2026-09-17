@@ -23,7 +23,7 @@ func NewAttachSession(name string) string {
 }
 
 // WarpAttachSession is NewAttachSession followed by the configuration a
-// Warp tab needs, chained with tmux's ";" separator so it runs after the
+// Warp tab needs, chained with tmux's `\;` separator so it runs after the
 // attach on both the create and attach-existing paths:
 //
 //   - the session's outward title becomes "session · pane title", so the
@@ -46,6 +46,10 @@ func WarpAttachSession(name, protocol, client string) string {
 	if client != "" {
 		b.WriteString(` \; set-environment WARP_CLIENT_VERSION ` + quote(client))
 	}
+	// allow-passthrough is deliberately last: tmux stops the rest of a chained
+	// command after an invalid option (probed on 3.6b) but still completes the
+	// attach, so on tmux < 3.3, where this option does not exist, nothing else
+	// is lost. Do not reorder the steps.
 	b.WriteString(` \; set-option -g allow-passthrough on`)
 	return b.String()
 }
