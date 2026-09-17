@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +16,44 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hiennguyenle/devbox/internal/config"
 	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
+	"github.com/hiennguyenle/devbox/internal/warp"
 )
+
+// TestMain pins every test outside Warp. Tests that need Warp call
+// forceWarp(t, true, id).
+func TestMain(m *testing.M) {
+	warp.Detect = func() bool { return false }
+	warp.SessionID = func() string { return "" }
+	os.Unsetenv("TMUX") // same results whether or not `go test` itself runs inside tmux
+	os.Exit(m.Run())
+}
+
+// forceWarp makes devbox believe it is (or is not) inside Warp with the
+// given session id, for the duration of one test.
+func forceWarp(t *testing.T, inside bool, sessionID string) {
+	t.Helper()
+	origDetect, origID := warp.Detect, warp.SessionID
+	warp.Detect = func() bool { return inside }
+	warp.SessionID = func() string { return sessionID }
+	t.Cleanup(func() {
+		warp.Detect = origDetect
+		warp.SessionID = origID
+	})
+}
+
+// execProbe is a MockExecutor whose Exec first runs during(), so a test can
+// observe state while the attach is "running".
+type execProbe struct {
+	sshpkg.MockExecutor
+	during func()
+}
+
+func (p *execProbe) Exec(cmd string, onDisconnect func()) error {
+	if p.during != nil {
+		p.during()
+	}
+	return p.MockExecutor.Exec(cmd, onDisconnect)
+}
 
 // exitWith produces a real *exec.ExitError with the given code.
 func exitWith(t *testing.T, code int) error {
@@ -152,7 +191,7 @@ func TestExecTmuxSession_PrintsResumeHintOnCleanExit(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "api")
 	})
 
 	if runErr != nil {
@@ -171,7 +210,7 @@ func TestExecTmuxSession_PrintsResumeHintOnceOnDisconnect(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "api")
 	})
 
 	if runErr != nil {
@@ -187,7 +226,7 @@ func TestExecTmuxSession_DoesNotPrintHintOnFailure(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "api")
 	})
 
 	if runErr == nil || !strings.Contains(runErr.Error(), "tmux is not installed") {
@@ -203,7 +242,7 @@ func TestExecTmuxSession_InvalidDirectResumeNamePrintsPickerFallback(t *testing.
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "out of band", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "out of band")
 	})
 
 	if runErr != nil {
@@ -768,5 +807,84 @@ func TestShellLocal(t *testing.T) {
 	}
 	if len(mock.ExecCalls) != 1 || mock.ExecCalls[0] != "" {
 		t.Errorf("ExecCalls = %v", mock.ExecCalls)
+	}
+}
+
+// --- Warp attach ---
+
+func TestExecTmuxSession_OutsideWarpSendsBareAttach(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, false, "")
+	mock := &sshpkg.MockExecutor{}
+
+	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
+
+	if got := mock.ExecCalls[0]; got != "tmux new -A -s 'api'" {
+		t.Errorf("Exec = %q, want bare attach", got)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpSendsChainAndTracksLiveRecord(t *testing.T) {
+	useTempConfigDir(t)
+	const id = "aca3a00ac45440f19afea15ac826acd0"
+	forceWarp(t, true, id)
+	t.Setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1")
+	t.Setenv("WARP_CLIENT_VERSION", "v1")
+
+	probe := &execProbe{}
+	probe.during = func() {
+		p, s, err := warp.LoadLive(warp.LiveDir(), id)
+		if err != nil || p != "builder-104" || s != "api" {
+			t.Errorf("live record during Exec = %q, %q, %v; want builder-104, api", p, s, err)
+		}
+	}
+
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
+
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
+	if got := probe.ExecCalls[0]; got != want {
+		t.Errorf("Exec =\n%s\nwant\n%s", got, want)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), id); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("live record after Exec: err = %v, want cleared", err)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpClearsLiveRecordOnError(t *testing.T) {
+	useTempConfigDir(t)
+	const id = "aca3a00ac45440f19afea15ac826acd0"
+	forceWarp(t, true, id)
+	mock := &sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}
+
+	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
+
+	if _, _, err := warp.LoadLive(warp.LiveDir(), id); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("live record after failed Exec: err = %v, want cleared", err)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpWithoutSessionIDSkipsRecord(t *testing.T) {
+	dir := useTempConfigDir(t)
+	forceWarp(t, true, "")
+	mock := &sshpkg.MockExecutor{}
+
+	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
+
+	if !strings.HasPrefix(mock.ExecCalls[0], `tmux new -A -s 'api' \; `) {
+		t.Errorf("Exec = %q, want the Warp chain even without a session id", mock.ExecCalls[0])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "warp", "live")); !os.IsNotExist(err) {
+		t.Error("no live dir should be created without a session id")
+	}
+}
+
+func TestExecTmuxSession_LocalHintDerivedFromProfileName(t *testing.T) {
+	useTempConfigDir(t)
+	mock := &sshpkg.MockExecutor{}
+
+	out := captureStdout(t, func() { _ = execTmuxSession(mock, localProfileName, "localhost", "work") })
+
+	if want := "To continue this session, run devbox resume --local work\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
 	}
 }

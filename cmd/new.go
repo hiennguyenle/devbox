@@ -40,7 +40,7 @@ func runNew(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Creating session %q...\n", name)
 	recordProfileSession(profName, name)
 
-	return execTmuxSession(client, host, name, profName == localProfileName)
+	return execTmuxSession(client, profName, host, name)
 }
 
 func generateSessionID() string {
