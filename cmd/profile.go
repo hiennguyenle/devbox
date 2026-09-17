@@ -13,6 +13,7 @@ import (
 
 	"github.com/hiennguyenle/devbox/internal/config"
 	"github.com/hiennguyenle/devbox/internal/validate"
+	"github.com/hiennguyenle/devbox/internal/warp"
 	"github.com/spf13/cobra"
 )
 
@@ -171,7 +172,28 @@ func addOrUpdateProfile(args []string) error {
 	}
 
 	fmt.Printf("Profile %q saved to %s\n", name, config.Path())
+	syncWarpAfterSave(cfg)
 	return nil
+}
+
+// syncWarpAfterSave regenerates the Warp tab configs after a profile change
+// when devbox is running inside Warp, so the + menu matches config.yaml
+// without a separate `devbox warp sync`. Best-effort: any failure is a
+// warning, never a failed profile command.
+func syncWarpAfterSave(cfg *config.Config) {
+	if !warp.Detect() {
+		return
+	}
+	dir, err := warpTabConfigsDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: warp sync: %v\n", err)
+		return
+	}
+	changes, err := warp.Sync(dir, cfg)
+	printWarpChanges(os.Stdout, changes)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: warp sync: %v\n", err)
+	}
 }
 
 // nextDefaultProfile decides the default after adding `name`: the first profile

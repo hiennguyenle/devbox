@@ -1201,3 +1201,48 @@ func TestWarpRestore_PrunesOldRecordsButStillRestoresCurrent(t *testing.T) {
 		t.Error("stale record for another tab should be pruned")
 	}
 }
+
+// --- profile auto-sync ---
+
+func TestSyncWarpAfterSave_OutsideWarpDoesNothing(t *testing.T) {
+	forceWarp(t, false, "")
+	tabDir := useTempTabConfigsDir(t)
+	cfg := &config.Config{DefaultProfile: "b", Profiles: map[string]*config.Profile{"b": {Host: "h", DefaultSession: "work"}}}
+
+	out := captureStdout(t, func() { syncWarpAfterSave(cfg) })
+
+	if out != "" {
+		t.Errorf("stdout = %q, want nothing outside Warp", out)
+	}
+	if entries, _ := os.ReadDir(tabDir); len(entries) != 0 {
+		t.Errorf("no files should be written outside Warp, got %d", len(entries))
+	}
+}
+
+func TestSyncWarpAfterSave_InsideWarpWritesConfigs(t *testing.T) {
+	forceWarp(t, true, "")
+	tabDir := useTempTabConfigsDir(t)
+	cfg := &config.Config{DefaultProfile: "b", Profiles: map[string]*config.Profile{"b": {Host: "h", DefaultSession: "work"}}}
+
+	out := captureStdout(t, func() { syncWarpAfterSave(cfg) })
+
+	want := "wrote " + filepath.Join(tabDir, "devbox_b.toml") + "\n" +
+		"wrote " + filepath.Join(tabDir, "devbox_local.toml") + "\n"
+	if out != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestSyncWarpAfterSave_MissingDirIsWarningOnly(t *testing.T) {
+	forceWarp(t, true, "")
+	orig := warpTabConfigsDir
+	warpTabConfigsDir = func() (string, error) { return "", fmt.Errorf("warp tab configs directory not found: /nowhere") }
+	t.Cleanup(func() { warpTabConfigsDir = orig })
+	cfg := &config.Config{Profiles: map[string]*config.Profile{"b": {Host: "h", DefaultSession: "work"}}}
+
+	out := captureStdout(t, func() { syncWarpAfterSave(cfg) }) // must not panic or exit
+
+	if out != "" {
+		t.Errorf("stdout = %q, want nothing (warning goes to stderr)", out)
+	}
+}
