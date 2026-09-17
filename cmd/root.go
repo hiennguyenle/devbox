@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
 	"github.com/hiennguyenle/devbox/internal/tmux"
 	"github.com/hiennguyenle/devbox/internal/validate"
+	"github.com/hiennguyenle/devbox/internal/warp"
 	"github.com/spf13/cobra"
 )
 
@@ -49,7 +51,7 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	recordProfileSession(name, defSession)
-	return execTmuxSession(client, host, defSession, name == localProfileName)
+	return execTmuxSession(client, name, host, defSession)
 }
 
 func requireConfig() (*config.Config, error) {
@@ -135,7 +137,17 @@ func handleExecErr(err error, host string, local bool) error {
 	return err
 }
 
-func execTmuxSession(client sshpkg.Executor, host, sessionName string, local bool) error {
+// execTmuxSession attaches sessionName on the resolved profile and prints
+// the resume hint when the session ends or the connection first drops.
+//
+// Inside Warp it sends the chained attach (title, env, passthrough) and
+// keeps a live record for this Warp tab while the attach runs, so a tab
+// restored after a reboot can find its session again. The record is
+// cleared whenever the attach returns, for any reason; it survives only
+// when the process dies without returning.
+func execTmuxSession(client sshpkg.Executor, profName, host, sessionName string) error {
+	local := profName == localProfileName
+
 	hintShown := false
 	showResumeHint := func() {
 		if hintShown {
@@ -153,7 +165,24 @@ func execTmuxSession(client sshpkg.Executor, host, sessionName string, local boo
 		fmt.Printf("To continue this session, run %s %s\n", resumeCmd, sessionName)
 	}
 
-	if err := handleExecErr(client.Exec(tmux.NewAttachSession(sessionName), showResumeHint), host, local); err != nil {
+	attach := tmux.NewAttachSession(sessionName)
+	if warp.Detect() {
+		protocol, clientVersion := warp.Env()
+		attach = tmux.WarpAttachSession(sessionName, protocol, clientVersion)
+		// Inside an existing tmux pane this process is nested, not the tab's own
+		// attach; saving here would overwrite the outer tab's record and the
+		// deferred clear would delete it. tmux >= 3.3 already hides Warp from
+		// nested shells via TERM_PROGRAM; this covers older servers.
+		if id := warp.SessionID(); id != "" && os.Getenv("TMUX") == "" {
+			liveDir := warp.LiveDir()
+			if err := warp.SaveLive(liveDir, id, profName, sessionName); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not save warp live record: %v\n", err)
+			}
+			defer warp.ClearLive(liveDir, id)
+		}
+	}
+
+	if err := handleExecErr(client.Exec(attach, showResumeHint), host, local); err != nil {
 		return err
 	}
 	showResumeHint()

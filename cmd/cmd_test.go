@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,11 +13,49 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hiennguyenle/devbox/internal/config"
 	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
+	"github.com/hiennguyenle/devbox/internal/warp"
 )
+
+// TestMain pins every test outside Warp. Tests that need Warp call
+// forceWarp(t, true, id).
+func TestMain(m *testing.M) {
+	warp.Detect = func() bool { return false }
+	warp.SessionID = func() string { return "" }
+	os.Unsetenv("TMUX") // same results whether or not `go test` itself runs inside tmux
+	os.Exit(m.Run())
+}
+
+// forceWarp makes devbox believe it is (or is not) inside Warp with the
+// given session id, for the duration of one test.
+func forceWarp(t *testing.T, inside bool, sessionID string) {
+	t.Helper()
+	origDetect, origID := warp.Detect, warp.SessionID
+	warp.Detect = func() bool { return inside }
+	warp.SessionID = func() string { return sessionID }
+	t.Cleanup(func() {
+		warp.Detect = origDetect
+		warp.SessionID = origID
+	})
+}
+
+// execProbe is a MockExecutor whose Exec first runs during(), so a test can
+// observe state while the attach is "running".
+type execProbe struct {
+	sshpkg.MockExecutor
+	during func()
+}
+
+func (p *execProbe) Exec(cmd string, onDisconnect func()) error {
+	if p.during != nil {
+		p.during()
+	}
+	return p.MockExecutor.Exec(cmd, onDisconnect)
+}
 
 // exitWith produces a real *exec.ExitError with the given code.
 func exitWith(t *testing.T, code int) error {
@@ -152,7 +193,7 @@ func TestExecTmuxSession_PrintsResumeHintOnCleanExit(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "api")
 	})
 
 	if runErr != nil {
@@ -171,7 +212,7 @@ func TestExecTmuxSession_PrintsResumeHintOnceOnDisconnect(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "api")
 	})
 
 	if runErr != nil {
@@ -187,7 +228,7 @@ func TestExecTmuxSession_DoesNotPrintHintOnFailure(t *testing.T) {
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "api", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "api")
 	})
 
 	if runErr == nil || !strings.Contains(runErr.Error(), "tmux is not installed") {
@@ -203,7 +244,7 @@ func TestExecTmuxSession_InvalidDirectResumeNamePrintsPickerFallback(t *testing.
 	var runErr error
 
 	out := captureStdout(t, func() {
-		runErr = execTmuxSession(mock, "myhost", "out of band", false)
+		runErr = execTmuxSession(mock, "builder", "myhost", "out of band")
 	})
 
 	if runErr != nil {
@@ -768,5 +809,520 @@ func TestShellLocal(t *testing.T) {
 	}
 	if len(mock.ExecCalls) != 1 || mock.ExecCalls[0] != "" {
 		t.Errorf("ExecCalls = %v", mock.ExecCalls)
+	}
+}
+
+// --- Warp attach ---
+
+func TestExecTmuxSession_OutsideWarpSendsBareAttach(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, false, "")
+	mock := &sshpkg.MockExecutor{}
+
+	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
+
+	if got := mock.ExecCalls[0]; got != "tmux new -A -s 'api'" {
+		t.Errorf("Exec = %q, want bare attach", got)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpSendsChainAndTracksLiveRecord(t *testing.T) {
+	useTempConfigDir(t)
+	const id = "aca3a00ac45440f19afea15ac826acd0"
+	forceWarp(t, true, id)
+	t.Setenv("WARP_CLI_AGENT_PROTOCOL_VERSION", "1")
+	t.Setenv("WARP_CLIENT_VERSION", "v1")
+
+	probe := &execProbe{}
+	probe.during = func() {
+		p, s, err := warp.LoadLive(warp.LiveDir(), id)
+		if err != nil || p != "builder-104" || s != "api" {
+			t.Errorf("live record during Exec = %q, %q, %v; want builder-104, api", p, s, err)
+		}
+	}
+
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
+
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
+	if got := probe.ExecCalls[0]; got != want {
+		t.Errorf("Exec =\n%s\nwant\n%s", got, want)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), id); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("live record after Exec: err = %v, want cleared", err)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpClearsLiveRecordOnError(t *testing.T) {
+	useTempConfigDir(t)
+	const id = "aca3a00ac45440f19afea15ac826acd0"
+	forceWarp(t, true, id)
+	probe := &execProbe{MockExecutor: sshpkg.MockExecutor{ExecErr: exitWith(t, 127)}}
+	probe.during = func() {
+		p, s, err := warp.LoadLive(warp.LiveDir(), id)
+		if err != nil || p != "builder-104" || s != "api" {
+			t.Errorf("live record during Exec = %q, %q, %v; want builder-104, api", p, s, err)
+		}
+	}
+
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
+
+	if _, _, err := warp.LoadLive(warp.LiveDir(), id); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("live record after failed Exec: err = %v, want cleared", err)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpNestedInTmuxSkipsLiveRecord(t *testing.T) {
+	useTempConfigDir(t)
+	const id = "aca3a00ac45440f19afea15ac826acd0"
+	forceWarp(t, true, id)
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	// The outer tab's own record: different from what a nested attach would
+	// write, so an overwrite is detectable.
+	if err := warp.SaveLive(warp.LiveDir(), id, "outer", "main"); err != nil {
+		t.Fatal(err)
+	}
+	recordPath := filepath.Join(warp.LiveDir(), id)
+	want := []byte("outer\nmain\n")
+
+	probe := &execProbe{}
+	probe.during = func() {
+		if got, err := os.ReadFile(recordPath); err != nil || !bytes.Equal(got, want) {
+			t.Errorf("live record during Exec = %q, %v; want %q untouched", got, err, want)
+		}
+	}
+
+	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
+
+	if got, err := os.ReadFile(recordPath); err != nil || !bytes.Equal(got, want) {
+		t.Errorf("live record after Exec = %q, %v; want the outer tab's record %q kept", got, err, want)
+	}
+}
+
+func TestExecTmuxSession_InsideWarpWithoutSessionIDSkipsRecord(t *testing.T) {
+	dir := useTempConfigDir(t)
+	forceWarp(t, true, "")
+	mock := &sshpkg.MockExecutor{}
+
+	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
+
+	if !strings.HasPrefix(mock.ExecCalls[0], `tmux new -A -s 'api' \; `) {
+		t.Errorf("Exec = %q, want the Warp chain even without a session id", mock.ExecCalls[0])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "warp", "live")); !os.IsNotExist(err) {
+		t.Error("no live dir should be created without a session id")
+	}
+}
+
+func TestExecTmuxSession_LocalHintDerivedFromProfileName(t *testing.T) {
+	useTempConfigDir(t)
+	mock := &sshpkg.MockExecutor{}
+
+	out := captureStdout(t, func() { _ = execTmuxSession(mock, localProfileName, "localhost", "work") })
+
+	if want := "To continue this session, run devbox resume --local work\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
+	}
+}
+
+// --- devbox warp sync / hook ---
+
+func useTempTabConfigsDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	orig := warpTabConfigsDir
+	warpTabConfigsDir = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { warpTabConfigsDir = orig })
+	return dir
+}
+
+func TestWarpSync_WritesFilesAndPrintsHookHint(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	tabDir := useTempTabConfigsDir(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpSync(warpSyncCmd, nil) })
+	if runErr != nil {
+		t.Fatalf("runWarpSync: %v", runErr)
+	}
+
+	want := strings.Join([]string{
+		"wrote " + filepath.Join(tabDir, "devbox_builder-104.toml"),
+		"wrote " + filepath.Join(tabDir, "devbox_local.toml"),
+		"",
+		"To reattach devbox tabs after a reboot, add to ~/.zshrc:",
+		`  eval "$(devbox warp hook zsh)"`,
+	}, "\n") + "\n"
+	if out != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out, want)
+	}
+	if data, _ := os.ReadFile(filepath.Join(tabDir, "devbox_builder-104.toml")); !strings.HasPrefix(string(data), warp.Marker+"\n") {
+		t.Error("generated file must start with the marker")
+	}
+}
+
+func TestWarpSync_NoConfigWritesLocalOnly(t *testing.T) {
+	useTempConfigDir(t) // no config.yaml saved
+	tabDir := useTempTabConfigsDir(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpSync(warpSyncCmd, nil) })
+	if runErr != nil {
+		t.Fatalf("runWarpSync: %v", runErr)
+	}
+	if !strings.HasPrefix(out, "wrote "+filepath.Join(tabDir, "devbox_local.toml")+"\n\nTo reattach") {
+		t.Errorf("stdout = %q, want only the local file then the hint", out)
+	}
+}
+
+func TestWarpSync_SkippedLineNamesUnmanagedFile(t *testing.T) {
+	useTempConfigDir(t)
+	tabDir := useTempTabConfigsDir(t)
+	mine := filepath.Join(tabDir, "devbox_local.toml")
+	if err := os.WriteFile(mine, []byte("name = \"mine\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() { _ = runWarpSync(warpSyncCmd, nil) })
+
+	if !strings.HasPrefix(out, "skipped "+mine+" (not managed by devbox)\n") {
+		t.Errorf("stdout = %q, want skipped line first", out)
+	}
+}
+
+func TestWarpSync_MissingWarpDirErrors(t *testing.T) {
+	useTempConfigDir(t)
+	orig := warpTabConfigsDir
+	warpTabConfigsDir = func() (string, error) {
+		return "", fmt.Errorf("warp tab configs directory not found: /nowhere/tab_configs")
+	}
+	t.Cleanup(func() { warpTabConfigsDir = orig })
+
+	err := runWarpSync(warpSyncCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "/nowhere/tab_configs") {
+		t.Errorf("err = %v, want directory-not-found", err)
+	}
+}
+
+func TestWarpHook_PrintsSnippet(t *testing.T) {
+	want, _ := warp.Hook("zsh")
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpHook(warpHookCmd, []string{"zsh"}) })
+	if runErr != nil || out != want {
+		t.Errorf("runWarpHook: err = %v, out =\n%s\nwant\n%s", runErr, out, want)
+	}
+}
+
+func TestWarpHook_RejectsUnknownShell(t *testing.T) {
+	err := runWarpHook(warpHookCmd, []string{"fish"})
+	if err == nil || !strings.Contains(err.Error(), `unsupported shell "fish"`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// --- devbox warp restore ---
+
+const testWarpID = "aca3a00ac45440f19afea15ac826acd0"
+
+func injectRemoteMock(t *testing.T) *sshpkg.MockExecutor {
+	t.Helper()
+	mock := &sshpkg.MockExecutor{}
+	orig := newClient
+	newClient = func(*config.Profile) sshpkg.Executor { return mock }
+	t.Cleanup(func() { newClient = orig })
+	return mock
+}
+
+func injectLocalMock(t *testing.T) *sshpkg.MockExecutor {
+	t.Helper()
+	mock := &sshpkg.MockExecutor{}
+	orig := newLocalClient
+	newLocalClient = func() sshpkg.Executor { return mock }
+	t.Cleanup(func() { newLocalClient = orig })
+	return mock
+}
+
+func TestWarpRestore_OutsideWarpIsSilent(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, false, "")
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want nothing", runErr, out, mock.ExecCalls)
+	}
+}
+
+func TestWarpRestore_NoRecordIsSilent(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want nothing", runErr, out, mock.ExecCalls)
+	}
+}
+
+func TestWarpRestore_InsideTmuxIsSilentAndKeepsRecord(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", "/tmp/tmux-501/default,123,0")
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want nothing inside tmux", runErr, out, mock.ExecCalls)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); err != nil {
+		t.Errorf("the outer tab's record must survive a nested shell, err = %v", err)
+	}
+}
+
+func TestWarpRestore_ReattachesRecordedSession(t *testing.T) {
+	useTempConfigDir(t)
+	fakeTTY(t, "ttytest")
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+	if runErr != nil {
+		t.Fatalf("runWarpRestore: %v", runErr)
+	}
+
+	if !strings.HasPrefix(out, "Restoring builder-104:api\n") {
+		t.Errorf("stdout = %q, want Restoring line first", out)
+	}
+	if len(mock.ExecCalls) != 1 || !strings.HasPrefix(mock.ExecCalls[0], "tmux new -A -s 'api' \\; ") {
+		t.Errorf("Exec calls = %v, want one Warp attach of api", mock.ExecCalls)
+	}
+	if got, _ := config.GetSession(config.SessionsDir(), "builder-104", "ttytest"); got != "api" {
+		t.Errorf("terminal affinity = %q, want api", got)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("live record after restore: err = %v, want cleared", err)
+	}
+}
+
+func TestWarpRestore_LocalRecordUsesLocalExecutor(t *testing.T) {
+	useTempConfigDir(t) // no config needed for local
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, localProfileName, "work"); err != nil {
+		t.Fatal(err)
+	}
+	remote := injectRemoteMock(t)
+	local := injectLocalMock(t)
+
+	out := captureStdout(t, func() { _ = runWarpRestore(warpRestoreCmd, nil) })
+
+	if !strings.HasPrefix(out, "Restoring local:work\n") {
+		t.Errorf("stdout = %q", out)
+	}
+	if len(local.ExecCalls) != 1 || len(remote.ExecCalls) != 0 {
+		t.Errorf("local execs = %v, remote execs = %v; want one local attach", local.ExecCalls, remote.ExecCalls)
+	}
+}
+
+func TestWarpRestore_DeletedProfileRemovesRecord(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "gone", "api"); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	if _, _, err := warp.LoadLive(warp.LiveDir(), testWarpID); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("record for a deleted profile should be removed, err = %v", err)
+	}
+}
+
+func TestWarpRestore_MissingConfigRemovesRecordAndWarns(t *testing.T) {
+	useTempConfigDir(t) // no config file written
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(warp.LiveDir(), testWarpID)); !os.IsNotExist(err) {
+		t.Error("a record is meaningless without a config; it should be removed")
+	}
+}
+
+func TestWarpRestore_BrokenConfigKeepsRecord(t *testing.T) {
+	useTempConfigDir(t)
+	if err := os.WriteFile(config.Path(), []byte("profiles: [not a map\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	forceWarp(t, true, testWarpID)
+	if err := warp.SaveLive(warp.LiveDir(), testWarpID, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	recordPath := filepath.Join(warp.LiveDir(), testWarpID)
+	want, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	out := captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || out != "" || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, out = %q, execs = %v; want silent stdout and no attach", runErr, out, mock.ExecCalls)
+	}
+	got, err := os.ReadFile(recordPath)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Errorf("record after a broken config = %q, %v; want %q kept so the next shell restores", got, err, want)
+	}
+}
+
+func TestWarpRestore_MalformedRecordIsRemoved(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	if err := os.MkdirAll(warp.LiveDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(warp.LiveDir(), testWarpID), []byte("junk\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	var runErr error
+	captureStdout(t, func() { runErr = runWarpRestore(warpRestoreCmd, nil) })
+
+	if runErr != nil || len(mock.ExecCalls) != 0 {
+		t.Errorf("err = %v, execs = %v; want exit 0 and no attach", runErr, mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(warp.LiveDir(), testWarpID)); !os.IsNotExist(err) {
+		t.Error("malformed record should be removed")
+	}
+}
+
+func TestWarpRestore_NoRecordLeavesSiblingsAlone(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	dir := warp.LiveDir()
+	const sibling = "0000000000000000000000000000dead"
+	if err := warp.SaveLive(dir, sibling, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, sibling), past, past); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	captureStdout(t, func() { _ = runWarpRestore(warpRestoreCmd, nil) })
+
+	if len(mock.ExecCalls) != 0 {
+		t.Errorf("no record for this tab, yet Exec ran: %v", mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sibling)); err != nil {
+		t.Error("a tab without a record must not prune a sibling's week-old record; that sibling may be restoring right now")
+	}
+}
+
+func TestWarpRestore_PrunesOldRecordsButStillRestoresCurrent(t *testing.T) {
+	useTempConfigDir(t)
+	p, def := oneProfile("builder-104", "h")
+	saveConfig(t, p, def)
+	forceWarp(t, true, testWarpID)
+	dir := warp.LiveDir()
+	for _, id := range []string{testWarpID, "0000000000000000000000000000dead"} {
+		if err := warp.SaveLive(dir, id, "builder-104", "api"); err != nil {
+			t.Fatal(err)
+		}
+		past := time.Now().Add(-8 * 24 * time.Hour)
+		if err := os.Chtimes(filepath.Join(dir, id), past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mock := injectRemoteMock(t)
+
+	captureStdout(t, func() { _ = runWarpRestore(warpRestoreCmd, nil) })
+
+	if len(mock.ExecCalls) != 1 {
+		t.Errorf("a week-old record for this very tab must still restore; execs = %v", mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "0000000000000000000000000000dead")); !os.IsNotExist(err) {
+		t.Error("stale record for another tab should be pruned")
+	}
+}
+
+// --- profile auto-sync ---
+
+func TestSyncWarpAfterSave_OutsideWarpDoesNothing(t *testing.T) {
+	forceWarp(t, false, "")
+	tabDir := useTempTabConfigsDir(t)
+	cfg := &config.Config{DefaultProfile: "b", Profiles: map[string]*config.Profile{"b": {Host: "h", DefaultSession: "work"}}}
+
+	out := captureStdout(t, func() { syncWarpAfterSave(cfg) })
+
+	if out != "" {
+		t.Errorf("stdout = %q, want nothing outside Warp", out)
+	}
+	if entries, _ := os.ReadDir(tabDir); len(entries) != 0 {
+		t.Errorf("no files should be written outside Warp, got %d", len(entries))
+	}
+}
+
+func TestSyncWarpAfterSave_InsideWarpWritesConfigs(t *testing.T) {
+	forceWarp(t, true, "")
+	tabDir := useTempTabConfigsDir(t)
+	cfg := &config.Config{DefaultProfile: "b", Profiles: map[string]*config.Profile{"b": {Host: "h", DefaultSession: "work"}}}
+
+	out := captureStdout(t, func() { syncWarpAfterSave(cfg) })
+
+	want := "wrote " + filepath.Join(tabDir, "devbox_b.toml") + "\n" +
+		"wrote " + filepath.Join(tabDir, "devbox_local.toml") + "\n"
+	if out != want {
+		t.Errorf("stdout =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestSyncWarpAfterSave_MissingDirIsWarningOnly(t *testing.T) {
+	forceWarp(t, true, "")
+	orig := warpTabConfigsDir
+	warpTabConfigsDir = func() (string, error) { return "", fmt.Errorf("warp tab configs directory not found: /nowhere") }
+	t.Cleanup(func() { warpTabConfigsDir = orig })
+	cfg := &config.Config{Profiles: map[string]*config.Profile{"b": {Host: "h", DefaultSession: "work"}}}
+
+	out := captureStdout(t, func() { syncWarpAfterSave(cfg) }) // must not panic or exit
+
+	if out != "" {
+		t.Errorf("stdout = %q, want nothing (warning goes to stderr)", out)
 	}
 }
