@@ -108,7 +108,8 @@ bytes it sends through the terminal.
   interactive shell with `TERM_PROGRAM=WarpTerminal`, a non-empty
   `WARP_TERMINAL_SESSION_UUID`, and `DEVBOX_WARP_RESTORE` not set to `0`.
 - **Stale records** (a tab closed before the reboot never comes back) are
-  removed by `devbox warp restore` when older than seven days.
+  removed by `devbox warp restore` when older than seven days, after that
+  tab's own attach has returned.
 - **Tracked commands:** root attach, `resume`, `new`, the picker, and local
   mode, through the single attach function. `devbox shell` is not tracked.
 - **Reserved name.** `warp` joins `validate.reservedNames`.
@@ -218,10 +219,13 @@ tmux new -A -s 'api' \; set-option set-titles on \
   - `warp.go` (new): `warp` parent command with `sync`, `hook`, and
     `restore` children. `sync` prints Changes then the hook hint. `restore`
     exits 0 silently when `$TMUX` is set (a shell inside the attached tmux
-    is not a restored tab), prunes stale records, loads the record for
-    `warp.SessionID()`, exits 0 silently when there is none, otherwise resolves the profile (`local`
+    is not a restored tab), loads the record for `warp.SessionID()`, exits 0
+    silently when there is none, otherwise resolves the profile (`local`
     resolves to the local executor), prints `Restoring <profile>:<session>`,
-    calls `recordProfileSession`, and runs `execTmuxSession`. A record naming
+    calls `recordProfileSession`, runs `execTmuxSession`, and only after the
+    attach returns prunes records older than seven days. Pruning before the
+    load would race: Warp restores every tab at once, and one tab could
+    delete a sibling's week-old record before that sibling reads it. A record naming
     a profile that no longer exists is removed with a warning, exit 0.
   - `root.go`: `execTmuxSession` picks `tmux.WarpAttachSession` when
     `warp.Detect()` is true, else `tmux.NewAttachSession`. When inside Warp

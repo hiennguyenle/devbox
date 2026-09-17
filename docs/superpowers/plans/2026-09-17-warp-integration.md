@@ -18,7 +18,7 @@
 - Profile colors cycle `green, yellow, magenta, cyan, red` in sorted profile order. Local is always `blue`. No `title` field.
 - Attach chain inside Warp, exactly: `tmux new -A -s 'NAME' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION 'P' \; set-environment WARP_CLIENT_VERSION 'C' \; set-option -g allow-passthrough on`. Env steps are omitted when their value is empty. Outside Warp the command stays `tmux new -A -s 'NAME'`.
 - Env values must match `^[A-Za-z0-9._-]+$` or are treated as empty. Warp session id must match `^[a-f0-9]{32}$` or is treated as empty.
-- Live records: `<config.Dir()>/warp/live/<uuid>`, content `<profile>\n<session>\n`, mode 0600. Pruned by `devbox warp restore` when older than 7 days, after loading the current record.
+- Live records: `<config.Dir()>/warp/live/<uuid>`, content `<profile>\n<session>\n`, mode 0600. Pruned by `devbox warp restore` when older than 7 days, only after this tab's attach has returned (never before the load, so sibling tabs restoring at the same moment keep their records).
 - devbox never edits rc files. `devbox warp restore` is silent (exit 0, no output) when there is nothing to do.
 - Documented minimum for notifications: tmux >= 3.3 on the remote, agent started in a window opened after attach, and a Warp plugin version that wraps for tmux (none released yet).
 - Existing behaviour outside Warp must not change; the full existing test suite must stay green after every task.
@@ -1537,7 +1537,7 @@ git commit -m "feat(cmd): devbox warp sync and hook; reserve warp as a profile n
 
 **Interfaces:**
 - Consumes: `execTmuxSession(client, profName, host, sessionName)` (Task 6); `warp.Detect`, `warp.SessionID`, `warp.LiveDir`, `warp.LoadLive`, `warp.ClearLive`, `warp.PruneLive`, `warp.SaveLive` (Tasks 1, 3); `requireConfig`, `newClient`, `newLocalClient`, `localProfileName`, `recordProfileSession` from `cmd`.
-- Produces: `warpRestoreCmd`, `runWarpRestore`. Restore is a silent no-op outside Warp, without a session id, and when `$TMUX` is set (a shell inside the attached tmux is not a restored tab).
+- Produces: `warpRestoreCmd`, `runWarpRestore`. Restore is a silent no-op outside Warp, without a session id, when `$TMUX` is set (a shell inside the attached tmux is not a restored tab), and when there is no record; the silent paths never prune. Pruning happens once, after the attach returns. Nine restore tests in total.
 
 - [ ] **Step 1: Write the failing tests** (append to `cmd/cmd_test.go`; add `"time"` to the imports)
 
@@ -1662,7 +1662,7 @@ func TestWarpRestore_LocalRecordUsesLocalExecutor(t *testing.T) {
 	}
 }
 
-func TestWarpRestore_DeletedProfileRemovesRecordAndWarns(t *testing.T) {
+func TestWarpRestore_DeletedProfileRemovesRecord(t *testing.T) {
 	useTempConfigDir(t)
 	p, def := oneProfile("builder-104", "h")
 	saveConfig(t, p, def)
@@ -1702,6 +1702,30 @@ func TestWarpRestore_MalformedRecordIsRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(warp.LiveDir(), testWarpID)); !os.IsNotExist(err) {
 		t.Error("malformed record should be removed")
+	}
+}
+
+func TestWarpRestore_NoRecordLeavesSiblingsAlone(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	dir := warp.LiveDir()
+	const sibling = "0000000000000000000000000000dead"
+	if err := warp.SaveLive(dir, sibling, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, sibling), past, past); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	captureStdout(t, func() { _ = runWarpRestore(warpRestoreCmd, nil) })
+
+	if len(mock.ExecCalls) != 0 {
+		t.Errorf("no record for this tab, yet Exec ran: %v", mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sibling)); err != nil {
+		t.Error("a tab without a record must not prune a sibling's week-old record; that sibling may be restoring right now")
 	}
 }
 
@@ -1750,6 +1774,9 @@ var warpRestoreCmd = &cobra.Command{
 	Short: "Reattach this Warp tab's session after a restart (run by the shell hook)",
 	Args:  cobra.NoArgs,
 	RunE:  runWarpRestore,
+	// Runs unattended from a shell hook: an attach error (host still down
+	// right after a reboot) should print the error, not the usage block.
+	SilenceUsage: true,
 }
 
 // liveRecordMaxAge is how long a live record may sit unused before it is
@@ -1774,9 +1801,6 @@ func runWarpRestore(cmd *cobra.Command, args []string) error {
 	dir := warp.LiveDir()
 
 	profName, session, err := warp.LoadLive(dir, id)
-	// Prune after loading so a week-old record for this very tab still
-	// restores; execTmuxSession re-saves it fresh while the attach runs.
-	warp.PruneLive(dir, liveRecordMaxAge)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -1808,7 +1832,13 @@ func runWarpRestore(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Restoring %s:%s\n", profName, session)
 	recordProfileSession(profName, session)
-	return execTmuxSession(client, profName, host, session)
+	err = execTmuxSession(client, profName, host, session)
+	// Prune only now, after this tab's attach has ended. Warp restores every
+	// tab at once; pruning before the load would let one tab delete a
+	// sibling's week-old record before that sibling reads it. By the time
+	// this returns, every sibling that restored has re-saved a fresh record.
+	warp.PruneLive(dir, liveRecordMaxAge)
+	return err
 }
 ```
 
