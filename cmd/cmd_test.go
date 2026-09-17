@@ -1108,7 +1108,7 @@ func TestWarpRestore_LocalRecordUsesLocalExecutor(t *testing.T) {
 	}
 }
 
-func TestWarpRestore_DeletedProfileRemovesRecordAndWarns(t *testing.T) {
+func TestWarpRestore_DeletedProfileRemovesRecord(t *testing.T) {
 	useTempConfigDir(t)
 	p, def := oneProfile("builder-104", "h")
 	saveConfig(t, p, def)
@@ -1148,6 +1148,30 @@ func TestWarpRestore_MalformedRecordIsRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(warp.LiveDir(), testWarpID)); !os.IsNotExist(err) {
 		t.Error("malformed record should be removed")
+	}
+}
+
+func TestWarpRestore_NoRecordLeavesSiblingsAlone(t *testing.T) {
+	useTempConfigDir(t)
+	forceWarp(t, true, testWarpID)
+	dir := warp.LiveDir()
+	const sibling = "0000000000000000000000000000dead"
+	if err := warp.SaveLive(dir, sibling, "builder-104", "api"); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, sibling), past, past); err != nil {
+		t.Fatal(err)
+	}
+	mock := injectRemoteMock(t)
+
+	captureStdout(t, func() { _ = runWarpRestore(warpRestoreCmd, nil) })
+
+	if len(mock.ExecCalls) != 0 {
+		t.Errorf("no record for this tab, yet Exec ran: %v", mock.ExecCalls)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sibling)); err != nil {
+		t.Error("a tab without a record must not prune a sibling's week-old record; that sibling may be restoring right now")
 	}
 }
 

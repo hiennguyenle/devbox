@@ -38,6 +38,9 @@ var warpRestoreCmd = &cobra.Command{
 	Short: "Reattach this Warp tab's session after a restart (run by the shell hook)",
 	Args:  cobra.NoArgs,
 	RunE:  runWarpRestore,
+	// Runs unattended from a shell hook: an attach error (host still down
+	// right after a reboot) should print the error, not the usage block.
+	SilenceUsage: true,
 }
 
 func init() {
@@ -113,9 +116,6 @@ func runWarpRestore(cmd *cobra.Command, args []string) error {
 	dir := warp.LiveDir()
 
 	profName, session, err := warp.LoadLive(dir, id)
-	// Prune after loading so a week-old record for this very tab still
-	// restores; execTmuxSession re-saves it fresh while the attach runs.
-	warp.PruneLive(dir, liveRecordMaxAge)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -147,5 +147,11 @@ func runWarpRestore(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Restoring %s:%s\n", profName, session)
 	recordProfileSession(profName, session)
-	return execTmuxSession(client, profName, host, session)
+	err = execTmuxSession(client, profName, host, session)
+	// Prune only now, after this tab's attach has ended. Warp restores every
+	// tab at once; pruning before the load would let one tab delete a
+	// sibling's week-old record before that sibling reads it. By the time
+	// this returns, every sibling that restored has re-saved a fresh record.
+	warp.PruneLive(dir, liveRecordMaxAge)
+	return err
 }
