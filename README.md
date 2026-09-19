@@ -17,6 +17,10 @@ Re-run the same command to update. The installer detects the OS and CPU,
 verifies the release checksum, and installs to `~/.local/bin`. Set
 `INSTALL_DIR` or `DEVBOX_VERSION` to override the destination or version.
 
+Once installed from Nexus, run `devbox update` to check for a newer release
+and update the executable currently in use. It verifies the release checksum
+before replacing the binary.
+
 ### From GitHub Releases
 
 Download the latest binary for your platform from [Releases](https://github.com/hiennguyenle/devbox/releases).
@@ -112,6 +116,7 @@ devbox warp sync        # generate Warp tab configs (one per profile + local)
 devbox warp hook zsh    # print the rc snippet that reattaches restored Warp tabs
 devbox warp restore     # reattach this Warp tab's session (run by the hook)
 devbox version          # print version
+devbox update           # check for and install the latest Nexus release
 devbox help             # print usage
 ```
 
