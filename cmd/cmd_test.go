@@ -843,7 +843,7 @@ func TestExecTmuxSession_InsideWarpSendsChainAndTracksLiveRecord(t *testing.T) {
 
 	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
 
-	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}} · #S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
 	if got := probe.ExecCalls[0]; got != want {
 		t.Errorf("Exec =\n%s\nwant\n%s", got, want)
 	}

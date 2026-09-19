@@ -10,6 +10,7 @@ import (
 
 	"github.com/hiennguyenle/devbox/internal/config"
 	sshpkg "github.com/hiennguyenle/devbox/internal/ssh"
+	"github.com/hiennguyenle/devbox/internal/tmux"
 	"github.com/hiennguyenle/devbox/internal/warp"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,13 @@ var warpHookCmd = &cobra.Command{
 	RunE:  runWarpHook,
 }
 
+var warpStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Print a tmux status segment for devbox sessions",
+	Args:  cobra.NoArgs,
+	RunE:  runWarpStatus,
+}
+
 var warpRestoreCmd = &cobra.Command{
 	Use:   "restore",
 	Short: "Reattach this Warp tab's session after a restart (run by the shell hook)",
@@ -44,7 +52,7 @@ var warpRestoreCmd = &cobra.Command{
 }
 
 func init() {
-	warpCmd.AddCommand(warpSyncCmd, warpHookCmd, warpRestoreCmd)
+	warpCmd.AddCommand(warpSyncCmd, warpHookCmd, warpRestoreCmd, warpStatusCmd)
 	rootCmd.AddCommand(warpCmd)
 }
 
@@ -91,6 +99,12 @@ func runWarpHook(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Print(snippet)
+	return nil
+}
+
+func runWarpStatus(cmd *cobra.Command, args []string) error {
+	fmt.Fprintln(cmd.OutOrStdout(), "Add this to ~/.tmux.conf on the managed host:")
+	fmt.Fprintf(cmd.OutOrStdout(), "set -g status-left %q\n", tmux.WarpStatusLeft())
 	return nil
 }
 

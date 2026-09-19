@@ -5,6 +5,19 @@ import (
 	"strings"
 )
 
+// agentMarker is a tmux format which labels Codex and Claude panes. It falls
+// back to the current window name when neither agent is active.
+const agentMarker = "#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}}"
+
+const warpTitle = agentMarker + " · #S · #T"
+
+const warpStatusLeft = "#[fg=black,bg=green,bold] " + agentMarker + " · #H · #S #[default] "
+
+// WarpStatusLeft is a copy-pasteable segment for a user's tmux theme.
+func WarpStatusLeft() string {
+	return warpStatusLeft
+}
+
 // quote wraps s in single quotes for the remote shell, so session names
 // (including ones created out-of-band with spaces or metacharacters) are
 // always a single literal word.
@@ -39,7 +52,7 @@ func WarpAttachSession(name, protocol, client string) string {
 	var b strings.Builder
 	b.WriteString(NewAttachSession(name))
 	b.WriteString(` \; set-option set-titles on`)
-	b.WriteString(` \; set-option set-titles-string '#S · #T'`)
+	b.WriteString(` \; set-option set-titles-string ` + quote(warpTitle))
 	if protocol != "" {
 		b.WriteString(` \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION ` + quote(protocol))
 	}

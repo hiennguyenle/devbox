@@ -115,6 +115,7 @@ devbox shell            # raw SSH, no tmux
 devbox warp sync        # generate Warp tab configs (one per profile + local)
 devbox warp hook zsh    # print the rc snippet that reattaches restored Warp tabs
 devbox warp restore     # reattach this Warp tab's session (run by the hook)
+devbox warp status      # print an opt-in tmux status-left segment
 devbox version          # print version
 devbox update           # check for and install the latest Nexus release
 devbox help             # print usage
@@ -175,10 +176,16 @@ wrote start with a marker comment and are the only ones it ever overwrites
 or removes. `devbox profile` re-runs the sync after saving when it runs
 inside Warp.
 
-**Live tab title.** While attached, the Warp tab reads
-`<session> · <pane title>`. Claude Code and Codex write their current task
-into the pane title, so the tab tracks what the agent is doing. This is set
-on the attached tmux session only; other terminals keep your tmux.conf.
+**Live tab title.** While attached, the Warp tab reads an agent marker plus
+`<session> · <pane title>`. Codex and Claude panes show `🤖 Codex` and
+`✦ Claude`; other panes show their window name. This is set on the attached
+tmux session only; other terminals keep your tmux.conf.
+
+**Status segment.** `devbox warp status` prints a `status-left` setting for
+the managed host's `~/.tmux.conf`. It shows the active Codex/Claude marker,
+host, and session, while preserving the rest of your existing theme (such as
+network, CPU, RAM, and time). Add the printed line and reload tmux with
+`tmux source-file ~/.tmux.conf`.
 
 **Reattach after a reboot.** Add the hook once:
 

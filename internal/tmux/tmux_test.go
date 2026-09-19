@@ -58,7 +58,7 @@ func TestRenameSession_ExactMatchTarget(t *testing.T) {
 
 func TestWarpAttachSession_FullChain(t *testing.T) {
 	got := WarpAttachSession("api", "1", "v0.2026.09.02.08.27.stable_01")
-	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v0.2026.09.02.08.27.stable_01' \; set-option -g allow-passthrough on`
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}} · #S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v0.2026.09.02.08.27.stable_01' \; set-option -g allow-passthrough on`
 	if got != want {
 		t.Errorf("WarpAttachSession =\n%s\nwant\n%s", got, want)
 	}
@@ -66,7 +66,7 @@ func TestWarpAttachSession_FullChain(t *testing.T) {
 
 func TestWarpAttachSession_OmitsEmptyEnvSteps(t *testing.T) {
 	got := WarpAttachSession("api", "", "")
-	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-option -g allow-passthrough on`
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}} · #S · #T' \; set-option -g allow-passthrough on`
 	if got != want {
 		t.Errorf("WarpAttachSession =\n%s\nwant\n%s", got, want)
 	}
@@ -74,7 +74,7 @@ func TestWarpAttachSession_OmitsEmptyEnvSteps(t *testing.T) {
 
 func TestWarpAttachSession_OmitsClientStepWhenOnlyProtocolIsSet(t *testing.T) {
 	got := WarpAttachSession("api", "1", "")
-	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-option -g allow-passthrough on`
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}} · #S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-option -g allow-passthrough on`
 	if got != want {
 		t.Errorf("WarpAttachSession =\n%s\nwant\n%s", got, want)
 	}
@@ -82,7 +82,7 @@ func TestWarpAttachSession_OmitsClientStepWhenOnlyProtocolIsSet(t *testing.T) {
 
 func TestWarpAttachSession_OmitsProtocolStepWhenOnlyClientIsSet(t *testing.T) {
 	got := WarpAttachSession("api", "", "v1")
-	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#S · #T' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
+	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}} · #S · #T' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
 	if got != want {
 		t.Errorf("WarpAttachSession =\n%s\nwant\n%s", got, want)
 	}
@@ -92,5 +92,14 @@ func TestWarpAttachSession_QuotesSessionName(t *testing.T) {
 	got := WarpAttachSession("it's", "", "")
 	if want := `tmux new -A -s 'it'\''s' \; `; !strings.HasPrefix(got, want) {
 		t.Errorf("WarpAttachSession = %q, want prefix %q", got, want)
+	}
+}
+
+func TestAgentMarkerUsesCaseInsensitiveGlob(t *testing.T) {
+	if strings.Contains(agentMarker, "m/ri:") {
+		t.Fatalf("agent marker uses regex mode with glob patterns: %q", agentMarker)
+	}
+	if !strings.Contains(agentMarker, "m/i:*codex*") || !strings.Contains(agentMarker, "m/i:*claude*") {
+		t.Fatalf("agent marker is missing case-insensitive Codex/Claude glob patterns: %q", agentMarker)
 	}
 }
