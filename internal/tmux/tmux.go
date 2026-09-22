@@ -43,14 +43,21 @@ func NewAttachSession(name string) string {
 //     Warp tab shows the session and whatever Claude Code or Codex wrote
 //     into the pane title (session-scoped; other sessions keep tmux.conf);
 //   - Warp's version variables are injected into the session environment
-//     so Warp's Claude Code plugin in windows opened later can emit
-//     notifications (omitted when empty);
+//     at creation and on reattach so agent plugins in the first shell and
+//     later windows can emit notifications (existing shells are unchanged);
 //   - allow-passthrough is turned on in memory so those notifications can
 //     traverse tmux (tmux >= 3.3; older servers print a status-line error
 //     and the attach still succeeds).
 func WarpAttachSession(name, protocol, client string) string {
 	var b strings.Builder
 	b.WriteString(NewAttachSession(name))
+	// -e reaches the first shell, before the later set-environment commands.
+	if protocol != "" {
+		b.WriteString(" -e " + quote("WARP_CLI_AGENT_PROTOCOL_VERSION="+protocol))
+	}
+	if client != "" {
+		b.WriteString(" -e " + quote("WARP_CLIENT_VERSION="+client))
+	}
 	b.WriteString(` \; set-option set-titles on`)
 	b.WriteString(` \; set-option set-titles-string ` + quote(warpTitle))
 	if protocol != "" {

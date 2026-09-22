@@ -843,7 +843,7 @@ func TestExecTmuxSession_InsideWarpSendsChainAndTracksLiveRecord(t *testing.T) {
 
 	captureStdout(t, func() { _ = execTmuxSession(probe, "builder-104", "myhost", "api") })
 
-	want := `tmux new -A -s 'api' \; set-option set-titles on \; set-option set-titles-string '#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}} · #S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
+	want := `tmux new -A -s 'api' -e 'WARP_CLI_AGENT_PROTOCOL_VERSION=1' -e 'WARP_CLIENT_VERSION=v1' \; set-option set-titles on \; set-option set-titles-string '#{?#{m/i:*codex*,#{pane_current_command}},🤖 Codex,#{?#{m/i:*codex*,#{window_name}},🤖 Codex,#{?#{m/i:*claude*,#{pane_current_command}},✦ Claude,#{?#{m/i:*claude*,#{window_name}},✦ Claude,⌘ #W}}}} · #S · #T' \; set-environment WARP_CLI_AGENT_PROTOCOL_VERSION '1' \; set-environment WARP_CLIENT_VERSION 'v1' \; set-option -g allow-passthrough on`
 	if got := probe.ExecCalls[0]; got != want {
 		t.Errorf("Exec =\n%s\nwant\n%s", got, want)
 	}
@@ -905,7 +905,7 @@ func TestExecTmuxSession_InsideWarpWithoutSessionIDSkipsRecord(t *testing.T) {
 
 	captureStdout(t, func() { _ = execTmuxSession(mock, "builder-104", "myhost", "api") })
 
-	if !strings.HasPrefix(mock.ExecCalls[0], `tmux new -A -s 'api' \; `) {
+	if !strings.HasPrefix(mock.ExecCalls[0], `tmux new -A -s 'api' `) || !strings.Contains(mock.ExecCalls[0], ` \; set-option set-titles on`) {
 		t.Errorf("Exec = %q, want the Warp chain even without a session id", mock.ExecCalls[0])
 	}
 	if _, err := os.Stat(filepath.Join(dir, "warp", "live")); !os.IsNotExist(err) {
@@ -1111,7 +1111,7 @@ func TestWarpRestore_ReattachesRecordedSession(t *testing.T) {
 	if !strings.HasPrefix(out, "Restoring builder-104:api\n") {
 		t.Errorf("stdout = %q, want Restoring line first", out)
 	}
-	if len(mock.ExecCalls) != 1 || !strings.HasPrefix(mock.ExecCalls[0], "tmux new -A -s 'api' \\; ") {
+	if len(mock.ExecCalls) != 1 || !strings.HasPrefix(mock.ExecCalls[0], "tmux new -A -s 'api' ") || !strings.Contains(mock.ExecCalls[0], ` \; set-option set-titles on`) {
 		t.Errorf("Exec calls = %v, want one Warp attach of api", mock.ExecCalls)
 	}
 	if got, _ := config.GetSession(config.SessionsDir(), "builder-104", "ttytest"); got != "api" {

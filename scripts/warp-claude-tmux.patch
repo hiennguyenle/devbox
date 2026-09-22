@@ -1,0 +1,14 @@
+--- a/scripts/emit-terminal-sequence.sh
++++ b/scripts/emit-terminal-sequence.sh
+@@ -54,6 +54,11 @@
+     local seq="$1"
+     [ -z "$seq" ] && return 0
+ 
++    # tmux forwards OSC only inside its passthrough envelope.
++    if [ -n "${TMUX:-}" ]; then
++        seq=$'\033Ptmux;'"${seq//$'\033'/$'\033\033'}"$'\033\\'
++    fi
++
+     # Classify the running Claude Code version, if we can.
+     local raw="${CLAUDE_CODE_VERSION:-}"
+     local ver=""

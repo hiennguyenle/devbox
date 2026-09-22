@@ -200,17 +200,43 @@ detached or closed do nothing. Set `DEVBOX_WARP_RESTORE=0` to turn it off.
 Put the `eval` line after whatever adds `devbox` to your `PATH`, and
 `export DEVBOX_WARP_RESTORE=0` above it if you want it off.
 
-**Notifications from remote Claude Code.** devbox forwards Warp's
+**Agent status and notifications from Claude Code and Codex.** devbox forwards Warp's
 `WARP_CLI_AGENT_PROTOCOL_VERSION` and `WARP_CLIENT_VERSION` into the tmux
 session and turns on `allow-passthrough` on the running server (in memory
-only). For Warp's Claude Code plugin to reach Warp through tmux, all of
+only). For the agent's Warp plugin to reach Warp through tmux, all of
 these must hold:
 
 - tmux 3.3 or newer on the remote;
-- Claude Code started in a tmux window or pane opened *after* devbox
-  attached (older shells never see the variables);
-- a version of the Warp plugin that wraps its notification for tmux. No
-  released version does this yet; until then the plumbing is inert.
+- the Warp plugin installed on the host running Claude Code or Codex;
+- the agent started in a new devbox session or a pane opened after devbox
+  attached (reattaching cannot update the environment of existing shells);
+- plugin events wrapped in tmux's passthrough envelope. The inspected
+  Claude plugin 2.2.0 and Codex plugin 0.4.1 need the patches below.
+
+From this checkout, apply the matching patch to the installed plugin directory
+on the agent's host (replace the example paths with its actual paths):
+
+```sh
+patch --dry-run --forward -p1 -d /path/to/claude-warp-plugin -i "$PWD/scripts/warp-claude-tmux.patch"
+patch --forward -p1 -d /path/to/claude-warp-plugin -i "$PWD/scripts/warp-claude-tmux.patch"
+patch --dry-run --forward -p1 -d /path/to/codex-warp-plugin -i "$PWD/scripts/warp-codex-tmux.patch"
+patch --forward -p1 -d /path/to/codex-warp-plugin -i "$PWD/scripts/warp-codex-tmux.patch"
+```
+
+Restart the agent in a fresh pane after patching. Plugin updates may replace
+these files; recheck support and the patch dry run after updating. The patches
+preserve native-terminal output and the existing event payloads. Claude's
+`terminalSequence` JSON and `/dev/tty` delivery paths are both covered.
+The transport regression check takes two **unpatched** plugin directories:
+
+```sh
+python3 scripts/warp-tmux_test.py /path/to/claude-warp-plugin /path/to/codex-warp-plugin
+```
+
+Warp receives working, permission-request, and turn-complete events. Its native
+indicator still needs visual verification through tmux: passthrough does not
+give Warp a separate native pane for every tmux pane. `allow-passthrough on`
+forwards visible panes; hidden panes and detached sessions are not covered.
 
 If you already have a profile called `warp`, rename it in
 `~/.config/devbox/config.yaml` (and its directory under
